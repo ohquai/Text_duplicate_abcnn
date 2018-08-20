@@ -1,4 +1,7 @@
 # -*- coding:utf-8 -*-
+"""
+https://blog.csdn.net/u014029197/article/details/80348047
+"""
 from __future__ import division
 import random
 import cv2
@@ -16,8 +19,6 @@ from matplotlib import pyplot as plt
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix, roc_curve, auc
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
-from keras.models import Model, load_model
-from keras.callbacks import ModelCheckpoint, EarlyStopping
 from keras.utils import to_categorical
 from keras.preprocessing.text import Tokenizer
 from keras.preprocessing.sequence import pad_sequences
@@ -81,6 +82,24 @@ class TextCNN(object):
             self.embedded_chars_expanded_right = tf.expand_dims(self.embedded_chars_right, -1)
         print(self.embedded_chars_expanded_right)
 
+        with tf.name_scope("att_mat"):
+            x1_expanded = tf.expand_dims(self.x1, -1)
+            x2_expanded = tf.expand_dims(self.x2, -1)
+
+            aW = tf.get_variable(name="aW", shape=(s, d), initializer=tf.contrib.layers.xavier_initializer(), regularizer=tf.contrib.layers.l2_regularizer(scale=l2_reg))
+            att_mat = self.make_attention_mat(x1_expanded, x2_expanded)
+
+            # [batch, s, s] * [s,d] => [batch, s, d]
+            # matrix transpose => [batch, d, s]
+            # expand dims => [batch, d, s, 1]
+            x1_a = tf.expand_dims(tf.matrix_transpose(tf.einsum("ijk,kl->ijl", att_mat, aW)), -1)
+            x2_a = tf.expand_dims(tf.matrix_transpose(
+                tf.einsum("ijk,kl->ijl", tf.matrix_transpose(att_mat), aW)), -1)
+
+            # [batch, d, s, 2]
+            x1 = tf.concat([x1_expanded, x1_a], axis=3)
+            x2 = tf.concat([x2_expanded, x2_a], axis=3)
+
         branch_am_cnn_left = self.branch_am_cnn(self.embedded_chars_expanded_left)
         branch_am_cnn_right = self.branch_am_cnn(self.embedded_chars_expanded_right)
         print(branch_am_cnn_left)
@@ -97,7 +116,8 @@ class TextCNN(object):
             print(self.h_drop_1)
 
         with tf.name_scope("fc1"):
-            W_fc1 = tf.get_variable("W_fc1", shape=[3072, 128], initializer=tf.contrib.layers.xavier_initializer())
+            # W_fc1 = tf.get_variable("W_fc1", shape=[3072, 128], initializer=tf.contrib.layers.xavier_initializer())
+            W_fc1 = tf.get_variable("W_fc1", shape=[3328, 128], initializer=tf.contrib.layers.xavier_initializer())
             b_fc1 = tf.Variable(tf.constant(0.1, shape=[128]), name="b_fc1")
             # self.l2_loss_fc1 += tf.nn.l2_loss(W_fc1)
             # self.l2_loss_fc1 += tf.nn.l2_loss(b_fc1)
@@ -131,7 +151,14 @@ class TextCNN(object):
             self.loss = tf.reduce_mean(losses) + self.l2_reg_lambda * l2_loss
 
     def pad_for_wide_conv(self, x, w):
-        return tf.pad(x, np.array([[0, 0], [0, 0], [w - 1, w - 1], [0, 0]]), "CONSTANT", name="pad_wide_conv")
+        return tf.pad(x, np.array([[0, 0], [w - 1, w - 1], [0, 0], [0, 0]]), "CONSTANT", name="pad_wide_conv")
+
+    def make_attention_mat(self, x1, x2):
+        # x1, x2 = [batch, height, width, 1] = [batch, d, s, 1]
+        # x2 => [batch, height, 1, width]
+        # [batch, width, wdith] = [batch, s, s]
+        euclidean = tf.sqrt(tf.reduce_sum(tf.square(x1 - tf.matrix_transpose(x2)), axis=1))
+        return 1 / (1 + euclidean)
 
     def cos_sim(self, v1, v2):
         norm1 = tf.sqrt(tf.reduce_sum(tf.square(v1), axis=1))
@@ -154,12 +181,13 @@ class TextCNN(object):
             embedded_chars_expanded = self.pad_for_wide_conv(embedded_chars_expanded, filter_size_1)
             # conv = tf.nn.conv2d(embedded_chars_expanded, W, strides=[1, 1, self.embedding_size, 1], padding="SAME", name="conv1")
             conv = tf.nn.conv2d(embedded_chars_expanded, W, strides=[1, 1, self.embedding_size, 1], padding="VALID", name="conv1")
+            print(conv)
             # Apply nonlinearity
             h = tf.nn.relu(tf.nn.bias_add(conv, b), name="relu1")
 
             # Maxpooling over the outputs
             # pooled = tf.nn.max_pool(h, ksize=[1, self.sequence_length_left - filter_size_1 + 1, 1, 1], strides=[1, 1, 1, 1], padding='VALID', name="pool")
-            pooled = tf.nn.max_pool(h, ksize=[1, 2, 1, 1], strides=[1, 2, 1, 1], padding='VALID', name="pool1")
+            pooled = tf.nn.max_pool(h, ksize=[1, filter_size_1, 1, 1], strides=[1, 2, 1, 1], padding='VALID', name="pool1")
             print(h)
             print(pooled)
             # pooled_outputs.append(pooled)
@@ -177,7 +205,7 @@ class TextCNN(object):
             h = tf.nn.relu(tf.nn.bias_add(conv, b), name="relu2")
             # Maxpooling over the outputs
             # pooled = tf.nn.max_pool(h, ksize=[1, self.sequence_length_left - filter_size_2 + 1, 1, 1], strides=[1, 1, 1, 1], padding='VALID', name="pool")
-            pooled = tf.nn.max_pool(h, ksize=[1, 2, 1, 1], strides=[1, 2, 1, 1], padding='VALID', name="pool2")
+            pooled = tf.nn.max_pool(h, ksize=[1, filter_size_2, 1, 1], strides=[1, 2, 1, 1], padding='VALID', name="pool2")
             print(h)
             print(pooled)
 
@@ -194,7 +222,7 @@ class TextCNN(object):
             h = tf.nn.relu(tf.nn.bias_add(conv, b), name="relu3")
             # Maxpooling over the outputs
             # pooled = tf.nn.max_pool(h, ksize=[1, self.sequence_length_left - filter_size_3 + 1, 1, 1], strides=[1, 1, 1, 1], padding='VALID', name="pool")
-            pooled = tf.nn.max_pool(h, ksize=[1, 2, 1, 1], strides=[1, 2, 1, 1], padding='VALID', name="pool3")
+            pooled = tf.nn.max_pool(h, ksize=[1, filter_size_3, 1, 1], strides=[1, 2, 1, 1], padding='VALID', name="pool3")
             print(h)
             print(pooled)
 
@@ -323,7 +351,7 @@ class Train:
 
                 # Define Training procedure
                 global_step = tf.Variable(0, name="global_step", trainable=False)
-                optimizer = tf.train.AdamOptimizer(learning_rate=1e-3)
+                optimizer = tf.train.AdamOptimizer(learning_rate=0.01)
                 grads_and_vars = optimizer.compute_gradients(cnn.loss)
                 train_op = optimizer.apply_gradients(grads_and_vars, global_step=global_step)
 
