@@ -76,29 +76,47 @@ class TextCNN(object):
         with tf.device('/cpu:0'), tf.name_scope("embedding"):
             self.W = tf.Variable(tf.random_uniform([self.vocab_size, self.embedding_size], -1.0, 1.0), name="W_emb")
             self.embedded_chars_left = tf.nn.embedding_lookup(self.W, self.input_left)
-            self.embedded_chars_expanded_left = tf.expand_dims(self.embedded_chars_left, -1)
+            self.embedded_chars_expanded_left = tf.expand_dims(self.embedded_chars_left, -1)  # [batch, s, d, 1]
 
             self.embedded_chars_right = tf.nn.embedding_lookup(self.W, self.input_right)
             self.embedded_chars_expanded_right = tf.expand_dims(self.embedded_chars_right, -1)
         print(self.embedded_chars_expanded_right)
 
         with tf.name_scope("att_mat"):
-            x1_expanded = tf.expand_dims(self.x1, -1)
-            x2_expanded = tf.expand_dims(self.x2, -1)
+            # x1_expanded = tf.expand_dims(self.x1, -1)
+            # x2_expanded = tf.expand_dims(self.x2, -1)
 
-            aW = tf.get_variable(name="aW", shape=(s, d), initializer=tf.contrib.layers.xavier_initializer(), regularizer=tf.contrib.layers.l2_regularizer(scale=l2_reg))
-            att_mat = self.make_attention_mat(x1_expanded, x2_expanded)
+            # aW = tf.get_variable(name="aW_left", shape=(self.sequence_length_left, self.sequence_length_right),
+            #                      initializer=tf.contrib.layers.xavier_initializer(),
+            #                      regularizer=tf.contrib.layers.l2_regularizer(scale=self.l2_reg_lambda))  # [batch, s, s]
+            aW_left = tf.get_variable(name="aW_left", shape=(self.sequence_length_right, self.embedding_size),
+                                      initializer=tf.contrib.layers.xavier_initializer(),
+                                      regularizer=tf.contrib.layers.l2_regularizer(
+                                          scale=self.l2_reg_lambda))  # [batch, s, s]
+            aW_right = tf.get_variable(name="aW_right", shape=(self.sequence_length_left, self.embedding_size),
+                                      initializer=tf.contrib.layers.xavier_initializer(),
+                                      regularizer=tf.contrib.layers.l2_regularizer(
+                                          scale=self.l2_reg_lambda))  # [batch, s, s]
+            # att_mat = self.make_attention_mat(self.embedded_chars_expanded_left, self.embedded_chars_expanded_right)
+            att_mat = self.cos_sim(self.embedded_chars_expanded_left, self.embedded_chars_expanded_right)  # [batch, s, s]
+
 
             # [batch, s, s] * [s,d] => [batch, s, d]
             # matrix transpose => [batch, d, s]
             # expand dims => [batch, d, s, 1]
-            x1_a = tf.expand_dims(tf.matrix_transpose(tf.einsum("ijk,kl->ijl", att_mat, aW)), -1)
-            x2_a = tf.expand_dims(tf.matrix_transpose(
-                tf.einsum("ijk,kl->ijl", tf.matrix_transpose(att_mat), aW)), -1)
+            print(att_mat)
+            print(aW_left)
+            print(aW_right)
+            # x1_a = tf.expand_dims(tf.matrix_transpose(tf.einsum("ijk,kl->ijl", att_mat, aW)), -1)
+            # x2_a = tf.expand_dims(tf.matrix_transpose(tf.einsum("ijk,kl->ijl", tf.matrix_transpose(att_mat), aW)), -1)
+            x1_a = tf.expand_dims(tf.einsum("ijk,kl->ijl", att_mat, aW_left), -1)
+            x2_a = tf.expand_dims(tf.einsum("ijk,kl->ijl", tf.matrix_transpose(att_mat), aW_right), -1)
 
+            print(x1_a)
+            print(x2_a)
             # [batch, d, s, 2]
-            x1 = tf.concat([x1_expanded, x1_a], axis=3)
-            x2 = tf.concat([x2_expanded, x2_a], axis=3)
+            self.embedded_chars_expanded_left = tf.concat([self.embedded_chars_expanded_left, x1_a], axis=3)
+            self.embedded_chars_expanded_right = tf.concat([self.embedded_chars_expanded_right, x2_a], axis=3)
 
         branch_am_cnn_left = self.branch_am_cnn(self.embedded_chars_expanded_left)
         branch_am_cnn_right = self.branch_am_cnn(self.embedded_chars_expanded_right)
@@ -154,6 +172,7 @@ class TextCNN(object):
         return tf.pad(x, np.array([[0, 0], [w - 1, w - 1], [0, 0], [0, 0]]), "CONSTANT", name="pad_wide_conv")
 
     def make_attention_mat(self, x1, x2):
+        # [batch, s, d, 1]
         # x1, x2 = [batch, height, width, 1] = [batch, d, s, 1]
         # x2 => [batch, height, 1, width]
         # [batch, width, wdith] = [batch, s, s]
@@ -161,10 +180,17 @@ class TextCNN(object):
         return 1 / (1 + euclidean)
 
     def cos_sim(self, v1, v2):
-        norm1 = tf.sqrt(tf.reduce_sum(tf.square(v1), axis=1))
-        norm2 = tf.sqrt(tf.reduce_sum(tf.square(v2), axis=1))
-        dot_products = tf.reduce_sum(v1 * v2, axis=1, name="cos_sim")
-        return dot_products / (norm1 * norm2)
+        # norm1 = tf.sqrt(tf.reduce_sum(tf.square(v1), axis=1))
+        # norm2 = tf.sqrt(tf.reduce_sum(tf.square(v2), axis=1))
+        v1_normed = tf.nn.l2_normalize(v1, dim=1, name=None)
+        v2_normed = tf.nn.l2_normalize(v2, dim=1, name=None)
+        # dot_products = tf.reduce_sum(v1 * v2, axis=1, name="cos_sim")
+        dot_products = tf.matmul(tf.reshape(v1_normed,
+                                            shape=(-1, self.sequence_length_left, self.embedding_size)),
+                                 tf.reshape(tf.transpose(v2_normed, perm=[0, 2, 1, 3]),
+                                            shape=(-1, self.embedding_size, self.sequence_length_right)))
+        return dot_products
+        # return dot_products / (norm1 * norm2)
 
     def euclidean_score(self, v1, v2):
         euclidean = tf.sqrt(tf.reduce_sum(tf.square(v1 - v2), axis=1))
@@ -237,10 +263,10 @@ class Train:
         self.val_split = 0.3
         self.MAX_ITEM_DESC_SEQ = 50
 
-        self.train_data = 'E:/data/quora-duplicate/train.tsv'
-        self.model_path = 'E:/data/quora-duplicate/model/'
-        # self.train_data = 'H:/tb/project0/quora/quora_duplicate_questions.tsv'
-        # self.model_path = 'H:/tb/project0/quora/model/'
+        # self.train_data = 'E:/data/quora-duplicate/train.tsv'
+        # self.model_path = 'E:/data/quora-duplicate/model/'
+        self.train_data = 'H:/tb/project0/quora/quora_duplicate_questions.tsv'
+        self.model_path = 'H:/tb/project0/quora/model/'
 
     @staticmethod
     def evaluation(y_true, y_predict):
