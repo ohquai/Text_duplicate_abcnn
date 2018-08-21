@@ -1,6 +1,11 @@
 # -*- coding:utf-8 -*-
 """
 https://blog.csdn.net/u014029197/article/details/80348047
+# 0.6606149051379254
+# 0.7668257933897369
+
+# 0.7083529150103558
+# 0.7507482252233845
 """
 from __future__ import division
 import random
@@ -82,46 +87,23 @@ class TextCNN(object):
             self.embedded_chars_expanded_right = tf.expand_dims(self.embedded_chars_right, -1)
         print(self.embedded_chars_expanded_right)
 
-        with tf.name_scope("att_mat"):
-            # x1_expanded = tf.expand_dims(self.x1, -1)
-            # x2_expanded = tf.expand_dims(self.x2, -1)
+        branch_am_cnn_left, branch_am_cnn_right = \
+            self.branch_am_cnn(self.embedded_chars_expanded_left, self.embedded_chars_expanded_right, channel=2,
+                               width=self.embedding_size, filter_size=3, num_filters=64, conv_pad='VALID',
+                               pool_pad='VALID', name='conv_1', abcnn1=True, abcnn2=True)
+        branch_am_cnn_left, branch_am_cnn_right = \
+            self.branch_am_cnn(branch_am_cnn_left, branch_am_cnn_right, channel=64,
+                               width=1, filter_size=3, num_filters=128, conv_pad='VALID',
+                               pool_pad='VALID', name='conv_2')
+        branch_am_cnn_left, branch_am_cnn_right = \
+            self.branch_am_cnn(branch_am_cnn_left, branch_am_cnn_right, channel=128,
+                               width=1, filter_size=3, num_filters=128, conv_pad='VALID',
+                               pool_pad='VALID', name='conv_3')
 
-            # aW = tf.get_variable(name="aW_left", shape=(self.sequence_length_left, self.sequence_length_right),
-            #                      initializer=tf.contrib.layers.xavier_initializer(),
-            #                      regularizer=tf.contrib.layers.l2_regularizer(scale=self.l2_reg_lambda))  # [batch, s, s]
-            aW_left = tf.get_variable(name="aW_left", shape=(self.sequence_length_right, self.embedding_size),
-                                      initializer=tf.contrib.layers.xavier_initializer(),
-                                      regularizer=tf.contrib.layers.l2_regularizer(
-                                          scale=self.l2_reg_lambda))  # [batch, s, s]
-            aW_right = tf.get_variable(name="aW_right", shape=(self.sequence_length_left, self.embedding_size),
-                                      initializer=tf.contrib.layers.xavier_initializer(),
-                                      regularizer=tf.contrib.layers.l2_regularizer(
-                                          scale=self.l2_reg_lambda))  # [batch, s, s]
-            # att_mat = self.make_attention_mat(self.embedded_chars_expanded_left, self.embedded_chars_expanded_right)
-            att_mat = self.cos_sim(self.embedded_chars_expanded_left, self.embedded_chars_expanded_right)  # [batch, s, s]
-
-
-            # [batch, s, s] * [s,d] => [batch, s, d]
-            # matrix transpose => [batch, d, s]
-            # expand dims => [batch, d, s, 1]
-            print(att_mat)
-            print(aW_left)
-            print(aW_right)
-            # x1_a = tf.expand_dims(tf.matrix_transpose(tf.einsum("ijk,kl->ijl", att_mat, aW)), -1)
-            # x2_a = tf.expand_dims(tf.matrix_transpose(tf.einsum("ijk,kl->ijl", tf.matrix_transpose(att_mat), aW)), -1)
-            x1_a = tf.expand_dims(tf.einsum("ijk,kl->ijl", att_mat, aW_left), -1)
-            x2_a = tf.expand_dims(tf.einsum("ijk,kl->ijl", tf.matrix_transpose(att_mat), aW_right), -1)
-
-            print(x1_a)
-            print(x2_a)
-            # [batch, d, s, 2]
-            self.embedded_chars_expanded_left = tf.concat([self.embedded_chars_expanded_left, x1_a], axis=3)
-            self.embedded_chars_expanded_right = tf.concat([self.embedded_chars_expanded_right, x2_a], axis=3)
-
-        branch_am_cnn_left = self.branch_am_cnn(self.embedded_chars_expanded_left)
-        branch_am_cnn_right = self.branch_am_cnn(self.embedded_chars_expanded_right)
+        # branch_am_cnn_left = self.branch_am_cnn(self.embedded_chars_expanded_left)
+        # branch_am_cnn_right = self.branch_am_cnn(self.embedded_chars_expanded_right)
         print(branch_am_cnn_left)
-        num_filters_total = 128 + 128
+        # num_filters_total = 128 + 128
         self.h_pool = tf.concat([branch_am_cnn_left, branch_am_cnn_right], 3)
         print(self.h_pool)
         self.h_pool_flat = tf.contrib.layers.flatten(self.h_pool)
@@ -184,11 +166,17 @@ class TextCNN(object):
         # norm2 = tf.sqrt(tf.reduce_sum(tf.square(v2), axis=1))
         v1_normed = tf.nn.l2_normalize(v1, dim=1, name=None)
         v2_normed = tf.nn.l2_normalize(v2, dim=1, name=None)
+        # v1_normed = v1
+        # v2_normed = v2
         # dot_products = tf.reduce_sum(v1 * v2, axis=1, name="cos_sim")
+        # dot_products = tf.matmul(tf.reshape(v1_normed,
+        #                                     shape=(-1, self.sequence_length_left, self.embedding_size)),
+        #                          tf.reshape(tf.transpose(v2_normed, perm=[0, 2, 1, 3]),
+        #                                     shape=(-1, self.embedding_size, self.sequence_length_right)))
         dot_products = tf.matmul(tf.reshape(v1_normed,
-                                            shape=(-1, self.sequence_length_left, self.embedding_size)),
+                                            shape=(-1, tf.shape(v1)[1], tf.shape(v1)[2])),
                                  tf.reshape(tf.transpose(v2_normed, perm=[0, 2, 1, 3]),
-                                            shape=(-1, self.embedding_size, self.sequence_length_right)))
+                                            shape=(-1, tf.shape(v2)[2], tf.shape(v2)[1])))
         return dot_products
         # return dot_products / (norm1 * norm2)
 
@@ -196,63 +184,108 @@ class TextCNN(object):
         euclidean = tf.sqrt(tf.reduce_sum(tf.square(v1 - v2), axis=1))
         return 1 / (1 + euclidean)
 
-    def branch_am_cnn(self, embedded_chars_expanded):
-        filter_size_1, filter_size_2, filter_size_3 = 3, 3, 3
-        num_filters_1, num_filters_2, num_filters_3 = 64, 128, 128
-        with tf.name_scope("conv-maxpool-%s" % filter_size_1):
+    def w_pool_att(self, x, attention, w, variable_scope):
+        # 'abcnn2_pool_' + name
+        # x: [batch, di, s+w-1, 1]
+        # attention: [batch, s+w-1]
+        with tf.variable_scope(variable_scope):
+            print("col_wise_sum")
+            sen_length = tf.shape(x)[1]
+            pools = []
+            # [batch, s+w-1] => [batch, 1, s+w-1, 1]
+            print(attention)
+            col_wise_sum = tf.reduce_sum(attention, axis=2)
+            print(col_wise_sum)
+            # attention = tf.transpose(tf.expand_dims(tf.expand_dims(attention, -1), -1), [0, 2, 1, 3])
+            attention = tf.expand_dims(tf.expand_dims(col_wise_sum, -1), -1)
+            print(attention)
+
+            for i in range(102):
+                # [batch, di, w, 1], [batch, 1, w, 1] => [batch, di, 1, 1]
+                # pools.append(tf.reduce_sum(x[:, i:i + w, :, :] * attention[:, i:i + w, :, :],
+                #                            axis=2,
+                #                            keep_dims=True))
+                pools.append(tf.shape(tf.reduce_sum(x[:, i:i + w, :, :] * attention[:, i:i + w, :, :],
+                                                    axis=1, keep_dims=True)))
+
+
+            # [batch, di, s, 1]
+            # w_ap = tf.concat(pools, axis=2, name="w_ap")
+            w_ap = tf.reshape(tf.concat(pools, axis=0, name="w_ap"), shape=[-1, 100, 1, 1])
+
+            # [batch, di, s, 1]
+        return w_ap
+
+    def branch_am_cnn(self, embedded_chars_expanded_left, embedded_chars_expanded_right, channel, width, filter_size, num_filters, conv_pad, pool_pad, name, abcnn1=False, abcnn2=False):
+        # Apply ABCNN-1
+        if abcnn1:
+            with tf.name_scope('abcnn1_mat_'+name):
+                aW_left = tf.get_variable(name="aW_left", shape=(self.sequence_length_right, width),
+                                          initializer=tf.contrib.layers.xavier_initializer(),
+                                          regularizer=tf.contrib.layers.l2_regularizer(
+                                              scale=self.l2_reg_lambda))  # [batch, s, s]
+                aW_right = tf.get_variable(name="aW_right", shape=(self.sequence_length_left, width),
+                                           initializer=tf.contrib.layers.xavier_initializer(),
+                                           regularizer=tf.contrib.layers.l2_regularizer(
+                                               scale=self.l2_reg_lambda))  # [batch, s, s]
+                att_mat = self.cos_sim(embedded_chars_expanded_left, embedded_chars_expanded_right)  # [batch, s, s]
+
+                x1_a = tf.expand_dims(tf.einsum("ijk,kl->ijl", att_mat, aW_left), -1)
+                x2_a = tf.expand_dims(tf.einsum("ijk,kl->ijl", tf.matrix_transpose(att_mat), aW_right), -1)
+
+                embedded_chars_expanded_left = tf.concat([embedded_chars_expanded_left, x1_a], axis=3)
+                embedded_chars_expanded_right = tf.concat([embedded_chars_expanded_right, x2_a], axis=3)
+
+        with tf.name_scope("conv-maxpool-"+name+'_left'):
             # Convolution Layer
-            filter_shape = [filter_size_1, self.embedding_size, 1, num_filters_1]
-            W = tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name="W")
-            b = tf.Variable(tf.constant(0.1, shape=[num_filters_1]), name="b")
-            embedded_chars_expanded = self.pad_for_wide_conv(embedded_chars_expanded, filter_size_1)
-            # conv = tf.nn.conv2d(embedded_chars_expanded, W, strides=[1, 1, self.embedding_size, 1], padding="SAME", name="conv1")
-            conv = tf.nn.conv2d(embedded_chars_expanded, W, strides=[1, 1, self.embedding_size, 1], padding="VALID", name="conv1")
-            print(conv)
+            filter_shape = [filter_size, width, channel, num_filters]
+            W = tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name='W_'+name+'_left')
+            b = tf.Variable(tf.constant(0.1, shape=[num_filters]), name='b_'+name+'_left')
+            embedded_chars_expanded = self.pad_for_wide_conv(embedded_chars_expanded_left, filter_size)
+            conv = tf.nn.conv2d(embedded_chars_expanded, W, strides=[1, 1, width, 1], padding=conv_pad, name='conv_'+name+'_left')
+
             # Apply nonlinearity
-            h = tf.nn.relu(tf.nn.bias_add(conv, b), name="relu1")
+            h_left = tf.nn.relu(tf.nn.bias_add(conv, b), name='relu_'+name+'_left')
 
-            # Maxpooling over the outputs
-            # pooled = tf.nn.max_pool(h, ksize=[1, self.sequence_length_left - filter_size_1 + 1, 1, 1], strides=[1, 1, 1, 1], padding='VALID', name="pool")
-            pooled = tf.nn.max_pool(h, ksize=[1, filter_size_1, 1, 1], strides=[1, 2, 1, 1], padding='VALID', name="pool1")
-            print(h)
-            print(pooled)
-            # pooled_outputs.append(pooled)
-
-        with tf.name_scope("conv-maxpool-%s" % filter_size_2):
+        with tf.name_scope("conv-maxpool-"+name+'_right'):
             # Convolution Layer
-            # filter_shape = [filter_size_2, self.embedding_size, 1, num_filters_2]
-            filter_shape = [filter_size_2, 1, num_filters_1, num_filters_2]
-            W = tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name="W")
-            b = tf.Variable(tf.constant(0.1, shape=[num_filters_2]), name="b")
-            # conv = tf.nn.conv2d(pooled, W, strides=[1, 1, 1, 1], padding="SAME", name="conv2")
-            pooled = self.pad_for_wide_conv(pooled, filter_size_1)
-            conv = tf.nn.conv2d(pooled, W, strides=[1, 1, 1, 1], padding="VALID", name="conv2")
-            # Apply nonlinearity
-            h = tf.nn.relu(tf.nn.bias_add(conv, b), name="relu2")
-            # Maxpooling over the outputs
-            # pooled = tf.nn.max_pool(h, ksize=[1, self.sequence_length_left - filter_size_2 + 1, 1, 1], strides=[1, 1, 1, 1], padding='VALID', name="pool")
-            pooled = tf.nn.max_pool(h, ksize=[1, filter_size_2, 1, 1], strides=[1, 2, 1, 1], padding='VALID', name="pool2")
-            print(h)
-            print(pooled)
+            filter_shape = [filter_size, width, channel, num_filters]
+            W = tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name='W_'+name+'_right')
+            b = tf.Variable(tf.constant(0.1, shape=[num_filters]), name='b_'+name+'_right')
+            embedded_chars_expanded = self.pad_for_wide_conv(embedded_chars_expanded_right, filter_size)
+            conv = tf.nn.conv2d(embedded_chars_expanded, W, strides=[1, 1, width, 1], padding=conv_pad, name='conv_'+name+'_right')
 
-        with tf.name_scope("conv-maxpool-%s" % filter_size_3):
-            # Convolution Layer
-            # filter_shape = [filter_size_3, self.embedding_size, 1, num_filters_3]
-            filter_shape = [filter_size_3, 1, num_filters_2, num_filters_3]
-            W = tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name="W")
-            b = tf.Variable(tf.constant(0.1, shape=[num_filters_3]), name="b")
-            pooled = self.pad_for_wide_conv(pooled, filter_size_1)
-            # conv = tf.nn.conv2d(pooled, W, strides=[1, 1, 1, 1], padding="SAME", name="conv3")
-            conv = tf.nn.conv2d(pooled, W, strides=[1, 1, 1, 1], padding="VALID", name="conv3")
             # Apply nonlinearity
-            h = tf.nn.relu(tf.nn.bias_add(conv, b), name="relu3")
-            # Maxpooling over the outputs
-            # pooled = tf.nn.max_pool(h, ksize=[1, self.sequence_length_left - filter_size_3 + 1, 1, 1], strides=[1, 1, 1, 1], padding='VALID', name="pool")
-            pooled = tf.nn.max_pool(h, ksize=[1, filter_size_3, 1, 1], strides=[1, 2, 1, 1], padding='VALID', name="pool3")
-            print(h)
-            print(pooled)
+            h_right = tf.nn.relu(tf.nn.bias_add(conv, b), name='relu_'+name+'_right')
+            print(h_right)
 
-        return pooled
+        # Apply ABCNN-2
+        if abcnn2:
+            with tf.name_scope('abcnn2_mat_' + name):
+                # aW_left = tf.get_variable(name="aW_left", shape=(self.sequence_length_right, width),
+                #                           initializer=tf.contrib.layers.xavier_initializer(),
+                #                           regularizer=tf.contrib.layers.l2_regularizer(
+                #                               scale=self.l2_reg_lambda))  # [batch, s, s]
+                # aW_right = tf.get_variable(name="aW_right", shape=(self.sequence_length_left, width),
+                #                            initializer=tf.contrib.layers.xavier_initializer(),
+                #                            regularizer=tf.contrib.layers.l2_regularizer(
+                #                                scale=self.l2_reg_lambda))  # [batch, s, s]
+                att_mat = self.cos_sim(h_left, h_right)  # [batch, s, s]
+
+                # x1_a = tf.expand_dims(tf.einsum("ijk,kl->ijl", att_mat, aW_left), -1)
+                # x2_a = tf.expand_dims(tf.einsum("ijk,kl->ijl", tf.matrix_transpose(att_mat), aW_right), -1)
+
+                # pooled_left = tf.concat([h_left, x1_a], axis=3)
+                # pooled_right = tf.concat([h_right, x2_a], axis=3)
+
+                pooled_left = self.w_pool_att(h_left, att_mat, w=2, variable_scope='abcnn2_pool_'+name)
+                pooled_right = self.w_pool_att(h_right, tf.transpose(att_mat, [0, 2, 1]), w=2, variable_scope='abcnn2_pool_'+name)
+        else:
+            # Maxpooling over the outputs
+            pooled_left = tf.nn.avg_pool(h_left, ksize=[1, filter_size, 1, 1], strides=[1, 2, 1, 1], padding=pool_pad, name='pool_'+name+'_left')
+            pooled_right = tf.nn.avg_pool(h_right, ksize=[1, filter_size, 1, 1], strides=[1, 2, 1, 1], padding=pool_pad, name='pool_'+name+'_right')
+
+        return pooled_left, pooled_right
 
 
 class Train:
@@ -263,10 +296,10 @@ class Train:
         self.val_split = 0.3
         self.MAX_ITEM_DESC_SEQ = 50
 
-        # self.train_data = 'E:/data/quora-duplicate/train.tsv'
-        # self.model_path = 'E:/data/quora-duplicate/model/'
-        self.train_data = 'H:/tb/project0/quora/quora_duplicate_questions.tsv'
-        self.model_path = 'H:/tb/project0/quora/model/'
+        self.train_data = 'E:/data/quora-duplicate/train.tsv'
+        self.model_path = 'E:/data/quora-duplicate/model/'
+        # self.train_data = 'H:/tb/project0/quora/quora_duplicate_questions.tsv'
+        # self.model_path = 'H:/tb/project0/quora/model/'
 
     @staticmethod
     def evaluation(y_true, y_predict):
@@ -377,7 +410,7 @@ class Train:
 
                 # Define Training procedure
                 global_step = tf.Variable(0, name="global_step", trainable=False)
-                optimizer = tf.train.AdamOptimizer(learning_rate=0.01)
+                optimizer = tf.train.AdamOptimizer(learning_rate=0.002)
                 grads_and_vars = optimizer.compute_gradients(cnn.loss)
                 train_op = optimizer.apply_gradients(grads_and_vars, global_step=global_step)
 
@@ -560,3 +593,97 @@ if __name__ == '__main__':
     x_left_train, x_right_train, y_train, x_left_dev, x_right_dev, y_dev, vocab_processor = obj_train.preprocess()
     obj_train.train(x_left_train, x_right_train, y_train, x_left_dev, x_right_dev, y_dev, vocab_processor)
 
+    # with tf.name_scope("att_mat"):
+    #     # x1_expanded = tf.expand_dims(self.x1, -1)
+    #     # x2_expanded = tf.expand_dims(self.x2, -1)
+    #
+    #     # aW = tf.get_variable(name="aW_left", shape=(self.sequence_length_left, self.sequence_length_right),
+    #     #                      initializer=tf.contrib.layers.xavier_initializer(),
+    #     #                      regularizer=tf.contrib.layers.l2_regularizer(scale=self.l2_reg_lambda))  # [batch, s, s]
+    #     aW_left = tf.get_variable(name="aW_left", shape=(self.sequence_length_right, self.embedding_size),
+    #                               initializer=tf.contrib.layers.xavier_initializer(),
+    #                               regularizer=tf.contrib.layers.l2_regularizer(
+    #                                   scale=self.l2_reg_lambda))  # [batch, s, s]
+    #     aW_right = tf.get_variable(name="aW_right", shape=(self.sequence_length_left, self.embedding_size),
+    #                               initializer=tf.contrib.layers.xavier_initializer(),
+    #                               regularizer=tf.contrib.layers.l2_regularizer(
+    #                                   scale=self.l2_reg_lambda))  # [batch, s, s]
+    #     # att_mat = self.make_attention_mat(self.embedded_chars_expanded_left, self.embedded_chars_expanded_right)
+    #     att_mat = self.cos_sim(self.embedded_chars_expanded_left, self.embedded_chars_expanded_right)  # [batch, s, s]
+    #
+    #     # [batch, s, s] * [s,d] => [batch, s, d]
+    #     # matrix transpose => [batch, d, s]
+    #     # expand dims => [batch, d, s, 1]
+    #     print(att_mat)
+    #     print(aW_left)
+    #     print(aW_right)
+    #     # x1_a = tf.expand_dims(tf.matrix_transpose(tf.einsum("ijk,kl->ijl", att_mat, aW)), -1)
+    #     # x2_a = tf.expand_dims(tf.matrix_transpose(tf.einsum("ijk,kl->ijl", tf.matrix_transpose(att_mat), aW)), -1)
+    #     x1_a = tf.expand_dims(tf.einsum("ijk,kl->ijl", att_mat, aW_left), -1)
+    #     x2_a = tf.expand_dims(tf.einsum("ijk,kl->ijl", tf.matrix_transpose(att_mat), aW_right), -1)
+    #
+    #     print(x1_a)
+    #     print(x2_a)
+    #     # [batch, d, s, 2]
+    #     self.embedded_chars_expanded_left = tf.concat([self.embedded_chars_expanded_left, x1_a], axis=3)
+    #     self.embedded_chars_expanded_right = tf.concat([self.embedded_chars_expanded_right, x2_a], axis=3)
+
+    # def branch_am_cnn(self, embedded_chars_expanded):
+    #     filter_size_1, filter_size_2, filter_size_3 = 3, 3, 3
+    #     num_filters_1, num_filters_2, num_filters_3 = 64, 128, 128
+    #     with tf.name_scope("conv-maxpool-%s" % filter_size_1):
+    #         # Convolution Layer
+    #         filter_shape = [filter_size_1, self.embedding_size, 2, num_filters_1]
+    #         W = tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name="W")
+    #         b = tf.Variable(tf.constant(0.1, shape=[num_filters_1]), name="b")
+    #         embedded_chars_expanded = self.pad_for_wide_conv(embedded_chars_expanded, filter_size_1)
+    #         # conv = tf.nn.conv2d(embedded_chars_expanded, W, strides=[1, 1, self.embedding_size, 1], padding="SAME", name="conv1")
+    #         conv = tf.nn.conv2d(embedded_chars_expanded, W, strides=[1, 1, self.embedding_size, 1], padding="VALID", name="conv1")
+    #         print(conv)
+    #         # Apply nonlinearity
+    #         h = tf.nn.relu(tf.nn.bias_add(conv, b), name="relu1")
+    #
+    #         # Maxpooling over the outputs
+    #         # pooled = tf.nn.max_pool(h, ksize=[1, self.sequence_length_left - filter_size_1 + 1, 1, 1], strides=[1, 1, 1, 1], padding='VALID', name="pool")
+    #         pooled = tf.nn.max_pool(h, ksize=[1, filter_size_1, 1, 1], strides=[1, 2, 1, 1], padding='VALID', name="pool1")
+    #         print(h)
+    #         print(pooled)
+    #         # pooled_outputs.append(pooled)
+    #
+    #     with tf.name_scope("conv-maxpool-%s" % filter_size_2):
+    #         # Convolution Layer
+    #         # filter_shape = [filter_size_2, self.embedding_size, 1, num_filters_2]
+    #         filter_shape = [filter_size_2, 1, num_filters_1, num_filters_2]
+    #         W = tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name="W")
+    #         b = tf.Variable(tf.constant(0.1, shape=[num_filters_2]), name="b")
+    #         # conv = tf.nn.conv2d(pooled, W, strides=[1, 1, 1, 1], padding="SAME", name="conv2")
+    #         pooled = self.pad_for_wide_conv(pooled, filter_size_1)
+    #         conv = tf.nn.conv2d(pooled, W, strides=[1, 1, 1, 1], padding="VALID", name="conv2")
+    #         # Apply nonlinearity
+    #         h = tf.nn.relu(tf.nn.bias_add(conv, b), name="relu2")
+    #         # Maxpooling over the outputs
+    #         # pooled = tf.nn.max_pool(h, ksize=[1, self.sequence_length_left - filter_size_2 + 1, 1, 1], strides=[1, 1, 1, 1], padding='VALID', name="pool")
+    #         pooled = tf.nn.max_pool(h, ksize=[1, filter_size_2, 1, 1], strides=[1, 2, 1, 1], padding='VALID', name="pool2")
+    #         print(h)
+    #         print(pooled)
+    #
+    #     with tf.name_scope("conv-maxpool-%s" % filter_size_3):
+    #         # Convolution Layer
+    #         # filter_shape = [filter_size_3, self.embedding_size, 1, num_filters_3]
+    #         filter_shape = [filter_size_3, 1, num_filters_2, num_filters_3]
+    #         W = tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name="W")
+    #         b = tf.Variable(tf.constant(0.1, shape=[num_filters_3]), name="b")
+    #         pooled = self.pad_for_wide_conv(pooled, filter_size_1)
+    #         # conv = tf.nn.conv2d(pooled, W, strides=[1, 1, 1, 1], padding="SAME", name="conv3")
+    #         conv = tf.nn.conv2d(pooled, W, strides=[1, 1, 1, 1], padding="VALID", name="conv3")
+    #         # Apply nonlinearity
+    #         h = tf.nn.relu(tf.nn.bias_add(conv, b), name="relu3")
+    #         # Maxpooling over the outputs
+    #         # pooled = tf.nn.max_pool(h, ksize=[1, self.sequence_length_left - filter_size_3 + 1, 1, 1],
+    #           strides=[1, 1, 1, 1], padding='VALID', name="pool")
+    #         pooled = tf.nn.max_pool(h, ksize=[1, filter_size_3, 1, 1], strides=[1, 2, 1, 1],
+    #           padding='VALID', name="pool3")
+    #         print(h)
+    #         print(pooled)
+    #
+    #     return pooled
