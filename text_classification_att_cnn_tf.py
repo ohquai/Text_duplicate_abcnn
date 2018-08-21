@@ -117,7 +117,8 @@ class TextCNN(object):
 
         with tf.name_scope("fc1"):
             # W_fc1 = tf.get_variable("W_fc1", shape=[3072, 128], initializer=tf.contrib.layers.xavier_initializer())
-            W_fc1 = tf.get_variable("W_fc1", shape=[3328, 128], initializer=tf.contrib.layers.xavier_initializer())
+            # W_fc1 = tf.get_variable("W_fc1", shape=[3328, 128], initializer=tf.contrib.layers.xavier_initializer())
+            W_fc1 = tf.get_variable("W_fc1", shape=[6400, 128], initializer=tf.contrib.layers.xavier_initializer())
             b_fc1 = tf.Variable(tf.constant(0.1, shape=[128]), name="b_fc1")
             # self.l2_loss_fc1 += tf.nn.l2_loss(W_fc1)
             # self.l2_loss_fc1 += tf.nn.l2_loss(b_fc1)
@@ -173,10 +174,16 @@ class TextCNN(object):
         #                                     shape=(-1, self.sequence_length_left, self.embedding_size)),
         #                          tf.reshape(tf.transpose(v2_normed, perm=[0, 2, 1, 3]),
         #                                     shape=(-1, self.embedding_size, self.sequence_length_right)))
-        dot_products = tf.matmul(tf.reshape(v1_normed,
-                                            shape=(-1, tf.shape(v1)[1], tf.shape(v1)[2])),
-                                 tf.reshape(tf.transpose(v2_normed, perm=[0, 2, 1, 3]),
-                                            shape=(-1, tf.shape(v2)[2], tf.shape(v2)[1])))
+        # dot_products = tf.matmul(tf.reshape(v1_normed,
+        #                                     shape=(-1, tf.shape(v1)[1], tf.shape(v1)[2])),
+        #                          tf.reshape(tf.transpose(v2_normed, perm=[0, 2, 1, 3]),
+        #                                     shape=(-1, tf.shape(v2)[2], tf.shape(v2)[1])))
+
+        dot_products = tf.reduce_mean(tf.transpose(tf.matmul(tf.transpose(v1_normed, perm=[0, 3, 1, 2]), tf.transpose(v2_normed, perm=[0, 3, 2, 1])),
+                                    perm=[0, 2, 3, 1]), axis=3)
+        print("cos_sim")
+        print(v1_normed)
+        print(dot_products)
         return dot_products
         # return dot_products / (norm1 * norm2)
 
@@ -200,18 +207,19 @@ class TextCNN(object):
             attention = tf.expand_dims(tf.expand_dims(col_wise_sum, -1), -1)
             print(attention)
 
-            for i in range(102):
+            for i in range(100):
                 # [batch, di, w, 1], [batch, 1, w, 1] => [batch, di, 1, 1]
                 # pools.append(tf.reduce_sum(x[:, i:i + w, :, :] * attention[:, i:i + w, :, :],
                 #                            axis=2,
                 #                            keep_dims=True))
-                pools.append(tf.shape(tf.reduce_sum(x[:, i:i + w, :, :] * attention[:, i:i + w, :, :],
-                                                    axis=1, keep_dims=True)))
-
+                pools.append(tf.reduce_mean(x[:, i:i+w, :, :] * attention[:, i:i+w, :, :], axis=1, keep_dims=True))
 
             # [batch, di, s, 1]
             # w_ap = tf.concat(pools, axis=2, name="w_ap")
-            w_ap = tf.reshape(tf.concat(pools, axis=0, name="w_ap"), shape=[-1, 100, 1, 1])
+            w_ap = tf.reshape(tf.concat(pools, axis=0, name="w_ap"), shape=[-1, 100, tf.shape(x)[2], tf.shape(x)[3]])
+            print(w_ap)
+            w_ap = tf.cast(w_ap, tf.float32)
+            print(w_ap)
 
             # [batch, di, s, 1]
         return w_ap
@@ -278,13 +286,14 @@ class TextCNN(object):
                 # pooled_left = tf.concat([h_left, x1_a], axis=3)
                 # pooled_right = tf.concat([h_right, x2_a], axis=3)
 
-                pooled_left = self.w_pool_att(h_left, att_mat, w=2, variable_scope='abcnn2_pool_'+name)
-                pooled_right = self.w_pool_att(h_right, tf.transpose(att_mat, [0, 2, 1]), w=2, variable_scope='abcnn2_pool_'+name)
+                pooled_left = self.w_pool_att(h_left, att_mat, w=3, variable_scope='abcnn2_pool_'+name)
+                pooled_right = self.w_pool_att(h_right, tf.transpose(att_mat, [0, 2, 1]), w=3, variable_scope='abcnn2_pool_'+name)
         else:
             # Maxpooling over the outputs
             pooled_left = tf.nn.avg_pool(h_left, ksize=[1, filter_size, 1, 1], strides=[1, 2, 1, 1], padding=pool_pad, name='pool_'+name+'_left')
             pooled_right = tf.nn.avg_pool(h_right, ksize=[1, filter_size, 1, 1], strides=[1, 2, 1, 1], padding=pool_pad, name='pool_'+name+'_right')
-
+        print(pooled_left)
+        print(pooled_right)
         return pooled_left, pooled_right
 
 
@@ -296,10 +305,10 @@ class Train:
         self.val_split = 0.3
         self.MAX_ITEM_DESC_SEQ = 50
 
-        self.train_data = 'E:/data/quora-duplicate/train.tsv'
-        self.model_path = 'E:/data/quora-duplicate/model/'
-        # self.train_data = 'H:/tb/project0/quora/quora_duplicate_questions.tsv'
-        # self.model_path = 'H:/tb/project0/quora/model/'
+        # self.train_data = 'E:/data/quora-duplicate/train.tsv'
+        # self.model_path = 'E:/data/quora-duplicate/model/'
+        self.train_data = 'H:/tb/project0/quora/quora_duplicate_questions.tsv'
+        self.model_path = 'H:/tb/project0/quora/model/'
 
     @staticmethod
     def evaluation(y_true, y_predict):
