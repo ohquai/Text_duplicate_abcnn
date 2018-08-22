@@ -165,7 +165,7 @@ class DataHelpers:
         return string.strip().lower()
 
 
-class TextCNN(object):
+class ABCNN(object):
     """
     A CNN for text classification.
     Uses an embedding layer, followed by a convolutional, max-pooling and softmax layer.
@@ -220,9 +220,9 @@ class TextCNN(object):
             print(self.h_drop_1)
 
         with tf.name_scope("fc1"):
-            # W_fc1 = tf.get_variable("W_fc1", shape=[3072, 128], initializer=tf.contrib.layers.xavier_initializer())
+            W_fc1 = tf.get_variable("W_fc1", shape=[3072, 128], initializer=tf.contrib.layers.xavier_initializer())
             # W_fc1 = tf.get_variable("W_fc1", shape=[3328, 128], initializer=tf.contrib.layers.xavier_initializer())
-            W_fc1 = tf.get_variable("W_fc1", shape=[6400, 128], initializer=tf.contrib.layers.xavier_initializer())
+            # W_fc1 = tf.get_variable("W_fc1", shape=[6400, 128], initializer=tf.contrib.layers.xavier_initializer())
             b_fc1 = tf.Variable(tf.constant(0.1, shape=[128]), name="b_fc1")
             # self.l2_loss_fc1 += tf.nn.l2_loss(W_fc1)
             # self.l2_loss_fc1 += tf.nn.l2_loss(b_fc1)
@@ -397,12 +397,12 @@ class TextCNN(object):
                 # pooled_left = tf.concat([h_left, x1_a], axis=3)
                 # pooled_right = tf.concat([h_right, x2_a], axis=3)
 
-                pooled_left = self.w_pool_att(h_left, att_mat, w=3, variable_scope='abcnn2_pool_'+name)
-                pooled_right = self.w_pool_att(h_right, tf.transpose(att_mat, [0, 2, 1]), w=3, variable_scope='abcnn2_pool_'+name)
+                pooled_left = self.w_pool_att(h_left, att_mat, w=filter_size, variable_scope='abcnn2_pool_'+name+'_left')
+                pooled_right = self.w_pool_att(h_right, tf.transpose(att_mat, [0, 2, 1]), w=filter_size, variable_scope='abcnn2_pool_'+name+'_right')
         else:
             # Maxpooling over the outputs
-            pooled_left = tf.nn.avg_pool(h_left, ksize=[1, filter_size, 1, 1], strides=[1, 2, 1, 1], padding=pool_pad, name='pool_'+name+'_left')
-            pooled_right = tf.nn.avg_pool(h_right, ksize=[1, filter_size, 1, 1], strides=[1, 2, 1, 1], padding=pool_pad, name='pool_'+name+'_right')
+            pooled_left = tf.nn.avg_pool(h_left, ksize=[1, filter_size, 1, 1], strides=[1, filter_size, 1, 1], padding=pool_pad, name='pool_'+name+'_left')
+            pooled_right = tf.nn.avg_pool(h_right, ksize=[1, filter_size, 1, 1], strides=[1, filter_size, 1, 1], padding=pool_pad, name='pool_'+name+'_right')
         print(pooled_left)
         print(pooled_right)
         return pooled_left, pooled_right
@@ -415,7 +415,7 @@ class Train:
             sess = tf.Session(config=session_conf)
             # sess = tf.Session()
             with sess.as_default():
-                cnn = TextCNN(sequence_length_left=x_train_left.shape[1],
+                cnn = ABCNN(sequence_length_left=x_train_left.shape[1],
                     sequence_length_right=x_train_right.shape[1],
                     num_classes=FLAGS.num_class,
                     vocab_size=len(vocab_processor.vocabulary_),
