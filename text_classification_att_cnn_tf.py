@@ -22,6 +22,7 @@ from scipy import interp
 from time import sleep
 from matplotlib import pyplot as plt
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix, roc_curve, auc
+from sklearn.preprocessing import label_binarize
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import LabelEncoder
 from keras.utils import to_categorical
@@ -32,7 +33,14 @@ FLAGS = tf.flags.FLAGS
 from tensorflow.contrib import learn
 # from attention_context import AttentionWithContext
 random.seed(2018)
+np.random.seed(2018)
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
+# Data loading path
+# tf.flags.DEFINE_string("train_data_file", "H:/tb/project0/quora/quora_duplicate_questions.tsv", "train data path.")
+# tf.flags.DEFINE_string("model_data_path", "H:/tb/project0/quora/model/", "model path for storing.")
+tf.flags.DEFINE_string("train_data_file", "E:/data/quora-duplicate/train.tsv", "train data path.")
+tf.flags.DEFINE_string("model_data_path", "E:/data/quora-duplicate/model/", "model path for storing.")
 
 # Data loading params
 tf.flags.DEFINE_float("dev_sample_percentage", .1, "Percentage of the training data to use for validation")
@@ -40,7 +48,9 @@ tf.flags.DEFINE_string("positive_data_file", "./data/rt-polaritydata/rt-polarity
 tf.flags.DEFINE_string("negative_data_file", "./data/rt-polaritydata/rt-polarity.neg", "Data source for the negative data.")
 
 # Model Hyperparameters
+tf.flags.DEFINE_integer("num_class", 2, "number of classes (default: 2)")
 tf.flags.DEFINE_integer("embedding_dim", 150, "Dimensionality of character embedding (default: 128)")
+tf.flags.DEFINE_integer("sentence_len", 50, "Maximum length for sentence pair (default: 50)")
 tf.flags.DEFINE_string("filter_sizes", "3,4,5", "Comma-separated filter sizes (default: '3,4,5')")
 tf.flags.DEFINE_integer("num_filters", 128, "Number of filters per filter size (default: 128)")
 tf.flags.DEFINE_float("dropout_keep_prob", 0.5, "Dropout keep probability (default: 0.5)")
@@ -57,6 +67,104 @@ tf.flags.DEFINE_boolean("allow_soft_placement", True, "Allow device soft device 
 tf.flags.DEFINE_boolean("log_device_placement", False, "Log placement of ops on devices")
 
 
+class Utils:
+    @staticmethod
+    def evaluation(y_true, y_predict):
+        accuracy = accuracy_score(y_true, y_predict)
+        precision, recall, f1, support = precision_recall_fscore_support(y_true, y_predict)
+        print('accuracy:' + str(accuracy))
+        print('precision:' + str(precision))
+        print('recall:' + str(recall))
+        print('f1:' + str(f1))
+
+    def show_model_effect(self, history, model_path):
+        """将训练过程中的评估指标变化可视化"""
+
+        # summarize history for accuracy
+        plt.plot(history.history["acc"])
+        plt.plot(history.history["val_acc"])
+        plt.title("Model accuracy")
+        plt.ylabel("accuracy")
+        plt.xlabel("epoch")
+        plt.legend(["train", "test"], loc="upper left")
+        plt.savefig(model_path+"/Performance_accuracy.jpg")
+
+        # summarize history for loss
+        plt.plot(history.history["loss"])
+        plt.plot(history.history["val_loss"])
+        plt.title("Model loss")
+        plt.ylabel("loss")
+        plt.xlabel("epoch")
+        plt.legend(["train", "test"], loc="upper left")
+        plt.savefig(model_path+"/Performance_loss.jpg")
+
+
+class DataHelpers:
+    def flatten(self, l):
+        return [item for sublist in l for item in sublist]
+
+    def data_cleaning(self, data):
+        data['question1'] = data['question1'].str.lower()
+        data['question1'].fillna(value="nan", inplace=True)
+        data['question2'] = data['question2'].str.lower()
+        data['question2'].fillna(value="nan", inplace=True)
+
+        # f1 = lambda a: re.sub(r'(@.*? )', '', a)
+        # f2 = lambda a: re.sub(r'(@.*?$)', '', a)
+        # f3 = lambda a: re.sub(' +', ' ', a)
+        # data['SentimentText'] = data['SentimentText'].apply(f1)
+        # data['SentimentText'] = data['SentimentText'].apply(f2)
+        # data['SentimentText'] = data['SentimentText'].apply(f3)
+
+        # english_stopwords = stopwords.words('english')
+        # list_senti = []
+        # for row in data['SentimentText']:
+        #     senti = [' '.join(a for a in row.split(' ') if a not in english_stopwords)]
+        #     list_senti.append(senti)
+        # data['SentimentText'] = list_senti
+
+        return data
+
+    def batch_iter(self, data, batch_size, num_epochs, shuffle=True):
+        """
+        Generates a batch iterator for a dataset.
+        """
+        data = np.array(data)
+        data_size = len(data)
+        num_batches_per_epoch = int((len(data) - 1) / batch_size) + 1
+        for epoch in range(num_epochs):
+            # Shuffle the data at each epoch
+            if shuffle:
+                shuffle_indices = np.random.permutation(np.arange(data_size))
+                shuffled_data = data[shuffle_indices]
+            else:
+                shuffled_data = data
+            for batch_num in range(num_batches_per_epoch):
+                start_index = batch_num * batch_size
+                end_index = min((batch_num + 1) * batch_size, data_size)
+                yield shuffled_data[start_index:end_index]
+
+    def clean_str(self, string):
+        """
+        Tokenization/string cleaning for all datasets except for SST.
+        Original taken from https://github.com/yoonkim/CNN_sentence/blob/master/process_data.py
+        """
+        string = re.sub(r"[^A-Za-z0-9(),!?\'\`]", " ", string)
+        string = re.sub(r"\'s", " \'s", string)
+        string = re.sub(r"\'ve", " \'ve", string)
+        string = re.sub(r"n\'t", " n\'t", string)
+        string = re.sub(r"\'re", " \'re", string)
+        string = re.sub(r"\'d", " \'d", string)
+        string = re.sub(r"\'ll", " \'ll", string)
+        string = re.sub(r",", " , ", string)
+        string = re.sub(r"!", " ! ", string)
+        string = re.sub(r"\(", " \( ", string)
+        string = re.sub(r"\)", " \) ", string)
+        string = re.sub(r"\?", " \? ", string)
+        string = re.sub(r"\s{2,}", " ", string)
+        return string.strip().lower()
+
+
 class TextCNN(object):
     """
     A CNN for text classification.
@@ -71,11 +179,7 @@ class TextCNN(object):
         self.embedding_size = embedding_size
         self.l2_reg_lambda = l2_reg_lambda
 
-        # Placeholders for input, output and dropout
-        self.input_left = tf.placeholder(tf.int32, [None, self.sequence_length_left], name="input_left")
-        self.input_right = tf.placeholder(tf.int32, [None, self.sequence_length_right], name="input_right")
-        self.input_y = tf.placeholder(tf.float32, [None, self.num_classes], name="input_y")
-        self.dropout_keep_prob = tf.placeholder(tf.float32, name="dropout_keep_prob")
+        self.set_placeholder()
         l2_loss = tf.constant(0.0)
 
         with tf.device('/cpu:0'), tf.name_scope("embedding"):
@@ -150,6 +254,13 @@ class TextCNN(object):
         with tf.name_scope("loss"):
             losses = tf.nn.softmax_cross_entropy_with_logits(logits=self.scores_o, labels=self.input_y)
             self.loss = tf.reduce_mean(losses) + self.l2_reg_lambda * l2_loss
+
+    def set_placeholder(self):
+        # Placeholders for input, output and dropout
+        self.input_left = tf.placeholder(tf.int32, [None, self.sequence_length_left], name="input_left")
+        self.input_right = tf.placeholder(tf.int32, [None, self.sequence_length_right], name="input_right")
+        self.input_y = tf.placeholder(tf.float32, [None, self.num_classes], name="input_y")
+        self.dropout_keep_prob = tf.placeholder(tf.float32, name="dropout_keep_prob")
 
     def pad_for_wide_conv(self, x, w):
         return tf.pad(x, np.array([[0, 0], [w - 1, w - 1], [0, 0], [0, 0]]), "CONSTANT", name="pad_wide_conv")
@@ -298,114 +409,7 @@ class TextCNN(object):
 
 
 class Train:
-    def __init__(self):
-        self.n_classes = 2
-        self.nb_epoch = 10
-        self.batch_size = 256 * 3
-        self.val_split = 0.3
-        self.MAX_ITEM_DESC_SEQ = 50
-
-        # self.train_data = 'E:/data/quora-duplicate/train.tsv'
-        # self.model_path = 'E:/data/quora-duplicate/model/'
-        self.train_data = 'H:/tb/project0/quora/quora_duplicate_questions.tsv'
-        self.model_path = 'H:/tb/project0/quora/model/'
-
-    @staticmethod
-    def evaluation(y_true, y_predict):
-        accuracy = accuracy_score(y_true, y_predict)
-        precision, recall, f1, support = precision_recall_fscore_support(y_true, y_predict)
-        print('accuracy:' + str(accuracy))
-        print('precision:' + str(precision))
-        print('recall:' + str(recall))
-        print('f1:' + str(f1))
-
-    def flatten(self, l):
-        return [item for sublist in l for item in sublist]
-
-    def data_cleaning(self, data):
-        data['question1'] = data['question1'].str.lower()
-        data['question1'].fillna(value="nan", inplace=True)
-        data['question2'] = data['question2'].str.lower()
-        data['question2'].fillna(value="nan", inplace=True)
-
-        # f1 = lambda a: re.sub(r'(@.*? )', '', a)
-        # f2 = lambda a: re.sub(r'(@.*?$)', '', a)
-        # f3 = lambda a: re.sub(' +', ' ', a)
-        # data['SentimentText'] = data['SentimentText'].apply(f1)
-        # data['SentimentText'] = data['SentimentText'].apply(f2)
-        # data['SentimentText'] = data['SentimentText'].apply(f3)
-
-        # english_stopwords = stopwords.words('english')
-        # list_senti = []
-        # for row in data['SentimentText']:
-        #     senti = [' '.join(a for a in row.split(' ') if a not in english_stopwords)]
-        #     list_senti.append(senti)
-        # data['SentimentText'] = list_senti
-
-        return data
-
-    def preprocessing(self, train_x, val_x):
-        print("start preprocessing")
-        raw_text = np.hstack([train_x['question1'], train_x['question2'], val_x['question1'], val_x['question2']])
-        tok_raw = Tokenizer()
-        tok_raw.fit_on_texts(raw_text)
-
-        train_x['seq_question1'] = tok_raw.texts_to_sequences(train_x['question1'])
-        train_x['seq_question2'] = tok_raw.texts_to_sequences(train_x['question2'])
-        val_x['seq_question1'] = tok_raw.texts_to_sequences(val_x['question1'])
-        val_x['seq_question2'] = tok_raw.texts_to_sequences(val_x['question2'])
-        self.MAX_TEXT = np.unique(self.flatten(np.concatenate([train_x['seq_question1'], train_x['seq_question2'], val_x['seq_question1'], val_x['seq_question2']]))).shape[0] + 1
-
-        train_Q1 = pad_sequences(train_x['seq_question1'], maxlen=self.MAX_ITEM_DESC_SEQ)
-        train_Q2 = pad_sequences(train_x['seq_question2'], maxlen=self.MAX_ITEM_DESC_SEQ)
-        val_Q1 = pad_sequences(val_x['seq_question1'], maxlen=self.MAX_ITEM_DESC_SEQ)
-        val_Q2 = pad_sequences(val_x['seq_question2'], maxlen=self.MAX_ITEM_DESC_SEQ)
-        return train_Q1, train_Q2, val_Q1, val_Q2
-
-    def show_model_effect(self, history):
-        """将训练过程中的评估指标变化可视化"""
-
-        # summarize history for accuracy
-        plt.plot(history.history["acc"])
-        plt.plot(history.history["val_acc"])
-        plt.title("Model accuracy")
-        plt.ylabel("accuracy")
-        plt.xlabel("epoch")
-        plt.legend(["train", "test"], loc="upper left")
-        plt.savefig(self.model_path+"/Performance_accuracy.jpg")
-
-        # summarize history for loss
-        plt.plot(history.history["loss"])
-        plt.plot(history.history["val_loss"])
-        plt.title("Model loss")
-        plt.ylabel("loss")
-        plt.xlabel("epoch")
-        plt.legend(["train", "test"], loc="upper left")
-        plt.savefig(self.model_path+"/Performance_loss.jpg")
-
-    def batch_iter(self, data, batch_size, num_epochs, shuffle=True):
-        """
-        Generates a batch iterator for a dataset.
-        """
-        data = np.array(data)
-        data_size = len(data)
-        num_batches_per_epoch = int((len(data) - 1) / batch_size) + 1
-        for epoch in range(num_epochs):
-            # Shuffle the data at each epoch
-            if shuffle:
-                shuffle_indices = np.random.permutation(np.arange(data_size))
-                shuffled_data = data[shuffle_indices]
-            else:
-                shuffled_data = data
-            for batch_num in range(num_batches_per_epoch):
-                start_index = batch_num * batch_size
-                end_index = min((batch_num + 1) * batch_size, data_size)
-                yield shuffled_data[start_index:end_index]
-
     def train(self, x_train_left, x_train_right, y_train, x_left_dev, x_right_dev, y_dev, vocab_processor):
-        # Training
-        # ==================================================
-
         with tf.Graph().as_default():
             session_conf = tf.ConfigProto(allow_soft_placement=FLAGS.allow_soft_placement, log_device_placement=FLAGS.log_device_placement)
             sess = tf.Session(config=session_conf)
@@ -413,7 +417,7 @@ class Train:
             with sess.as_default():
                 cnn = TextCNN(sequence_length_left=x_train_left.shape[1],
                     sequence_length_right=x_train_right.shape[1],
-                    num_classes=y_train.shape[1],
+                    num_classes=FLAGS.num_class,
                     vocab_size=len(vocab_processor.vocabulary_),
                     embedding_size=FLAGS.embedding_dim)
 
@@ -500,14 +504,14 @@ class Train:
                     return loss, accuracy
 
                 # Generate batches
-                batches = self.batch_iter(list(zip(x_train_left, x_train_right, y_train)), FLAGS.batch_size, FLAGS.num_epochs)
+                batches = DataHelpers().batch_iter(list(zip(x_train_left, x_train_right, y_train)), FLAGS.batch_size, FLAGS.num_epochs)
                 # Training loop. For each batch...
                 for batch in batches:
                     x_left_batch, x_right_batch, y_batch = zip(*batch)
                     train_step(x_left_batch, x_right_batch, y_batch)
                     current_step = tf.train.global_step(sess, global_step)
                     if current_step % FLAGS.evaluate_every == 0:
-                        dev_batches = self.batch_iter(list(zip(x_left_dev, x_right_dev, y_dev)), FLAGS.batch_size, 1)
+                        dev_batches = DataHelpers().batch_iter(list(zip(x_left_dev, x_right_dev, y_dev)), FLAGS.batch_size, 1)
                         total_dev_correct = 0
                         print("\nEvaluation:")
                         for dev_batch in dev_batches:
@@ -522,52 +526,13 @@ class Train:
                         path = saver.save(sess, checkpoint_prefix, global_step=current_step)
                         print("Saved model checkpoint to {}\n".format(path))
 
-    def clean_str(self, string):
-        """
-        Tokenization/string cleaning for all datasets except for SST.
-        Original taken from https://github.com/yoonkim/CNN_sentence/blob/master/process_data.py
-        """
-        string = re.sub(r"[^A-Za-z0-9(),!?\'\`]", " ", string)
-        string = re.sub(r"\'s", " \'s", string)
-        string = re.sub(r"\'ve", " \'ve", string)
-        string = re.sub(r"n\'t", " n\'t", string)
-        string = re.sub(r"\'re", " \'re", string)
-        string = re.sub(r"\'d", " \'d", string)
-        string = re.sub(r"\'ll", " \'ll", string)
-        string = re.sub(r",", " , ", string)
-        string = re.sub(r"!", " ! ", string)
-        string = re.sub(r"\(", " \( ", string)
-        string = re.sub(r"\)", " \) ", string)
-        string = re.sub(r"\?", " \? ", string)
-        string = re.sub(r"\s{2,}", " ", string)
-        return string.strip().lower()
-
-    def load_data_and_labels(self, positive_data_file, negative_data_file):
-        """
-        Loads MR polarity data from files, splits the data into words and generates labels.
-        Returns split sentences and labels.
-        """
-        # Load data from files
-        positive_examples = list(open(positive_data_file, "r", encoding='utf-8').readlines())
-        positive_examples = [s.strip() for s in positive_examples]
-        negative_examples = list(open(negative_data_file, "r", encoding='utf-8').readlines())
-        negative_examples = [s.strip() for s in negative_examples]
-        # Split by words
-        x_text = positive_examples + negative_examples
-        x_text = [self.clean_str(sent) for sent in x_text]
-        # Generate labels
-        positive_labels = [[0, 1] for _ in positive_examples]
-        negative_labels = [[1, 0] for _ in negative_examples]
-        y = np.concatenate([positive_labels, negative_labels], 0)
-        return [x_text, y]
-
     def preprocess(self):
         # 读取训练数据
-        data = pd.read_csv(self.train_data, sep="\t", error_bad_lines=False)
+        data = pd.read_csv(FLAGS.train_data_file, sep="\t", error_bad_lines=False)
         print(pd.value_counts(data['is_duplicate']))
 
         # 数据清洗
-        data = self.data_cleaning(data)
+        data = DataHelpers().data_cleaning(data=data)
 
         # Build vocabulary
         # max_document_length = max([len(x.split(" ")) for x in x_text])
@@ -577,11 +542,8 @@ class Train:
         # x = np.array(list(vocab_processor.fit_transform(x_text)))
         x_left = np.array(list(vocab_processor.transform(data['question1'])))
         x_right = np.array(list(vocab_processor.transform(data['question2'])))
-        y = to_categorical(data['is_duplicate'], num_classes=self.n_classes)
-        print(y.shape)
-        print(type(y))
+        y = to_categorical(data['is_duplicate'], num_classes=FLAGS.num_class)
 
-        np.random.seed(2018)
         shuffle_indices = np.random.permutation(np.arange(len(y)))
         x_left_shuffled = x_left[shuffle_indices]
         x_right_shuffled = x_right[shuffle_indices]
@@ -696,3 +658,40 @@ if __name__ == '__main__':
     #         print(pooled)
     #
     #     return pooled
+
+    # def preprocessing(self, train_x, val_x):
+    #     print("start preprocessing")
+    #     raw_text = np.hstack([train_x['question1'], train_x['question2'], val_x['question1'], val_x['question2']])
+    #     tok_raw = Tokenizer()
+    #     tok_raw.fit_on_texts(raw_text)
+    #
+    #     train_x['seq_question1'] = tok_raw.texts_to_sequences(train_x['question1'])
+    #     train_x['seq_question2'] = tok_raw.texts_to_sequences(train_x['question2'])
+    #     val_x['seq_question1'] = tok_raw.texts_to_sequences(val_x['question1'])
+    #     val_x['seq_question2'] = tok_raw.texts_to_sequences(val_x['question2'])
+    #     self.MAX_TEXT = np.unique(DataHelpers.flatten(np.concatenate([train_x['seq_question1'], train_x['seq_question2'], val_x['seq_question1'], val_x['seq_question2']]))).shape[0] + 1
+    #
+    #     train_Q1 = pad_sequences(train_x['seq_question1'], maxlen=FLAGS.sentence_len)
+    #     train_Q2 = pad_sequences(train_x['seq_question2'], maxlen=FLAGS.sentence_len)
+    #     val_Q1 = pad_sequences(val_x['seq_question1'], maxlen=FLAGS.sentence_len)
+    #     val_Q2 = pad_sequences(val_x['seq_question2'], maxlen=FLAGS.sentence_len)
+    #     return train_Q1, train_Q2, val_Q1, val_Q2
+
+    # def load_data_and_labels(self, positive_data_file, negative_data_file):
+    #     """
+    #     Loads MR polarity data from files, splits the data into words and generates labels.
+    #     Returns split sentences and labels.
+    #     """
+    #     # Load data from files
+    #     positive_examples = list(open(positive_data_file, "r", encoding='utf-8').readlines())
+    #     positive_examples = [s.strip() for s in positive_examples]
+    #     negative_examples = list(open(negative_data_file, "r", encoding='utf-8').readlines())
+    #     negative_examples = [s.strip() for s in negative_examples]
+    #     # Split by words
+    #     x_text = positive_examples + negative_examples
+    #     x_text = [DataHelpers.clean_str(sent) for sent in x_text]
+    #     # Generate labels
+    #     positive_labels = [[0, 1] for _ in positive_examples]
+    #     negative_labels = [[1, 0] for _ in negative_examples]
+    #     y = np.concatenate([positive_labels, negative_labels], 0)
+    #     return [x_text, y]
