@@ -1,8 +1,17 @@
 # -*- coding:utf-8 -*-
 """
 https://blog.csdn.net/u014029197/article/details/80348047
-# 0.6606149051379254
-# 0.7668257933897369
+# 0.725790893
+# 0.765316975
+# 0.779762052
+# 0.787306142
+# 0.796161171
+# 0.801479136
+# 0.80820698
+# 0.812782903
+# 0.815157436
+# 0.82057434
+
 
 # 0.7083529150103558
 # 0.7507482252233845
@@ -37,10 +46,10 @@ np.random.seed(2018)
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # Data loading path
-# tf.flags.DEFINE_string("train_data_file", "H:/tb/project0/quora/quora_duplicate_questions.tsv", "train data path.")
-# tf.flags.DEFINE_string("model_data_path", "H:/tb/project0/quora/model/", "model path for storing.")
-tf.flags.DEFINE_string("train_data_file", "E:/data/quora-duplicate/train.tsv", "train data path.")
-tf.flags.DEFINE_string("model_data_path", "E:/data/quora-duplicate/model/", "model path for storing.")
+tf.flags.DEFINE_string("train_data_file", "H:/tb/project0/quora/quora_duplicate_questions.tsv", "train data path.")
+tf.flags.DEFINE_string("model_data_path", "H:/tb/project0/quora/model/", "model path for storing.")
+# tf.flags.DEFINE_string("train_data_file", "E:/data/quora-duplicate/train.tsv", "train data path.")
+# tf.flags.DEFINE_string("model_data_path", "E:/data/quora-duplicate/model/", "model path for storing.")
 
 # Data loading params
 tf.flags.DEFINE_float("dev_sample_percentage", .1, "Percentage of the training data to use for validation")
@@ -49,6 +58,7 @@ tf.flags.DEFINE_string("negative_data_file", "./data/rt-polaritydata/rt-polarity
 
 # Model Hyperparameters
 tf.flags.DEFINE_integer("num_class", 2, "number of classes (default: 2)")
+tf.flags.DEFINE_float("lr", 0.002, "learning rate (default: 0.002)")
 tf.flags.DEFINE_integer("embedding_dim", 150, "Dimensionality of character embedding (default: 128)")
 tf.flags.DEFINE_integer("sentence_len", 50, "Maximum length for sentence pair (default: 50)")
 tf.flags.DEFINE_string("filter_sizes", "3,4,5", "Comma-separated filter sizes (default: '3,4,5')")
@@ -192,14 +202,15 @@ class ABCNN(object):
             self.embedded_chars_expanded_right = tf.expand_dims(self.embedded_chars_right, -1)
         print(self.embedded_chars_expanded_right)
 
+
         branch_am_cnn_left, branch_am_cnn_right = \
             self.branch_am_cnn(self.embedded_chars_expanded_left, self.embedded_chars_expanded_right, channel=2,
                                width=self.embedding_size, filter_size=3, num_filters=64, conv_pad='VALID',
                                pool_pad='VALID', name='conv_1', abcnn1=True, abcnn2=False)
         branch_am_cnn_left, branch_am_cnn_right = \
-            self.branch_am_cnn(branch_am_cnn_left, branch_am_cnn_right, channel=64,
+            self.branch_am_cnn(branch_am_cnn_left, branch_am_cnn_right, channel=128,
                                width=1, filter_size=3, num_filters=128, conv_pad='VALID',
-                               pool_pad='VALID', name='conv_2')
+                               pool_pad='VALID', name='conv_2', abcnn1=True)
         branch_am_cnn_left, branch_am_cnn_right = \
             self.branch_am_cnn(branch_am_cnn_left, branch_am_cnn_right, channel=128,
                                width=1, filter_size=3, num_filters=64, conv_pad='VALID',
@@ -211,12 +222,12 @@ class ABCNN(object):
         if FLAGS.last_layer == 'GAP':
             # use GAP for softmax
             with tf.name_scope("GAP1"):
-                filter_shape = [1, 1, 256, 2]
+                filter_shape = [1, 1, 128, 2]
                 W = tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name='W_GAP')
                 # b = tf.Variable(tf.constant(0.1, shape=[2]), name='b_GAP')
                 conv = tf.nn.conv2d(self.h_pool, W, strides=[1, 1, 1, 1], padding='SAME', name='conv_GAP')
                 print(conv)
-                pool = tf.nn.avg_pool(conv, ksize=[1, 12, 1, 1], strides=[1, 1, 1, 1], padding='VALID')
+                pool = tf.nn.avg_pool(conv, ksize=[1, 4, 1, 1], strides=[1, 1, 1, 1], padding='VALID')
                 print(pool)
                 self.scores_o = tf.reduce_mean(pool, axis=[1, 2])
                 print(self.scores_o)
@@ -231,7 +242,7 @@ class ABCNN(object):
                 print(self.h_drop_1)
 
             with tf.name_scope("fc1"):
-                W_fc1 = tf.get_variable("W_fc1", shape=[1536, 128], initializer=tf.contrib.layers.xavier_initializer())
+                W_fc1 = tf.get_variable("W_fc1", shape=[512, 128], initializer=tf.contrib.layers.xavier_initializer())
                 # W_fc1 = tf.get_variable("W_fc1", shape=[3328, 128], initializer=tf.contrib.layers.xavier_initializer())
                 # W_fc1 = tf.get_variable("W_fc1", shape=[6400, 128], initializer=tf.contrib.layers.xavier_initializer())
                 b_fc1 = tf.Variable(tf.constant(0.1, shape=[128]), name="b_fc1")
@@ -362,16 +373,19 @@ class ABCNN(object):
         # Apply ABCNN-1
         if abcnn1:
             with tf.name_scope('abcnn1_mat_'+name):
-                aW_left = tf.get_variable(name="aW_left", shape=(self.sequence_length_right, width),
+                aW_left = tf.get_variable(name='aW_'+name+'_left', shape=(self.sequence_length_left, width),
                                           initializer=tf.contrib.layers.xavier_initializer(),
                                           regularizer=tf.contrib.layers.l2_regularizer(
                                               scale=self.l2_reg_lambda))  # [batch, s, s]
-                aW_right = tf.get_variable(name="aW_right", shape=(self.sequence_length_left, width),
+                aW_right = tf.get_variable(name='aW_'+name+'_right', shape=(self.sequence_length_right, width),
                                            initializer=tf.contrib.layers.xavier_initializer(),
                                            regularizer=tf.contrib.layers.l2_regularizer(
                                                scale=self.l2_reg_lambda))  # [batch, s, s]
                 att_mat = self.cos_sim(embedded_chars_expanded_left, embedded_chars_expanded_right)  # [batch, s, s]
 
+                print("ijk,kl->ijl")
+                print(att_mat)
+                print(aW_left)
                 x1_a = tf.expand_dims(tf.einsum("ijk,kl->ijl", att_mat, aW_left), -1)
                 x2_a = tf.expand_dims(tf.einsum("ijk,kl->ijl", tf.matrix_transpose(att_mat), aW_right), -1)
 
@@ -446,7 +460,7 @@ class Train:
 
                 # Define Training procedure
                 global_step = tf.Variable(0, name="global_step", trainable=False)
-                optimizer = tf.train.AdamOptimizer(learning_rate=0.002)
+                optimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.lr)
                 grads_and_vars = optimizer.compute_gradients(cnn.loss)
                 train_op = optimizer.apply_gradients(grads_and_vars, global_step=global_step)
 
