@@ -1,5 +1,6 @@
 # -*- coding:utf-8 -*-
 """
+Seamese architecture
 https://blog.csdn.net/u014029197/article/details/80348047
 # 0.725790893
 # 0.765316975
@@ -46,10 +47,10 @@ np.random.seed(2018)
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # Data loading path
-tf.flags.DEFINE_string("train_data_file", "H:/tb/project0/quora/quora_duplicate_questions.tsv", "train data path.")
-tf.flags.DEFINE_string("model_data_path", "H:/tb/project0/quora/model/", "model path for storing.")
-# tf.flags.DEFINE_string("train_data_file", "E:/data/quora-duplicate/train.tsv", "train data path.")
-# tf.flags.DEFINE_string("model_data_path", "E:/data/quora-duplicate/model/", "model path for storing.")
+# tf.flags.DEFINE_string("train_data_file", "H:/tb/project0/quora/quora_duplicate_questions.tsv", "train data path.")
+# tf.flags.DEFINE_string("model_data_path", "H:/tb/project0/quora/model/", "model path for storing.")
+tf.flags.DEFINE_string("train_data_file", "E:/data/quora-duplicate/train.tsv", "train data path.")
+tf.flags.DEFINE_string("model_data_path", "E:/data/quora-duplicate/model/", "model path for storing.")
 
 # Data loading params
 tf.flags.DEFINE_float("dev_sample_percentage", .1, "Percentage of the training data to use for validation")
@@ -202,19 +203,28 @@ class ABCNN(object):
             self.embedded_chars_expanded_right = tf.expand_dims(self.embedded_chars_right, -1)
         print(self.embedded_chars_expanded_right)
 
-
+        channel_list = [1, 64, 128]
+        filters_list = [64, 128, 64]
+        abcnn1 = [True, False, False]
+        abcnn2 = [True, False, False]
         branch_am_cnn_left, branch_am_cnn_right = \
-            self.branch_am_cnn(self.embedded_chars_expanded_left, self.embedded_chars_expanded_right, channel=2,
-                               width=self.embedding_size, filter_size=3, num_filters=64, conv_pad='VALID',
-                               pool_pad='VALID', name='conv_1', abcnn1=True, abcnn2=False)
+            self.branch_am_cnn(self.embedded_chars_expanded_left, self.embedded_chars_expanded_right,
+                               channel=(2 if abcnn1[0] else 1),
+                               width=self.embedding_size, filter_size=3, num_filters=filters_list[0], conv_pad='VALID',
+                               pool_pad='VALID', name='conv_1', left_len=self.sequence_length_left,
+                               right_len=self.sequence_length_right, abcnn1=abcnn1[0], abcnn2=abcnn2[0])
         branch_am_cnn_left, branch_am_cnn_right = \
-            self.branch_am_cnn(branch_am_cnn_left, branch_am_cnn_right, channel=128,
-                               width=1, filter_size=3, num_filters=128, conv_pad='VALID',
-                               pool_pad='VALID', name='conv_2', abcnn1=True)
+            self.branch_am_cnn(branch_am_cnn_left, branch_am_cnn_right,
+                               channel=(2 if abcnn1[1] else 1),
+                               width=channel_list[1], filter_size=3, num_filters=filters_list[1], conv_pad='VALID',
+                               pool_pad='VALID', name='conv_2', left_len=34, right_len=34,
+                               abcnn1=abcnn1[1], abcnn2=abcnn2[1])
         branch_am_cnn_left, branch_am_cnn_right = \
-            self.branch_am_cnn(branch_am_cnn_left, branch_am_cnn_right, channel=128,
-                               width=1, filter_size=3, num_filters=64, conv_pad='VALID',
-                               pool_pad='VALID', name='conv_3')
+            self.branch_am_cnn(branch_am_cnn_left, branch_am_cnn_right,
+                               channel=(2 if abcnn1[2] else 1),
+                               width=channel_list[2], filter_size=3, num_filters=filters_list[2], conv_pad='VALID',
+                               pool_pad='VALID', name='conv_3', left_len=12, right_len=12,
+                               abcnn1=abcnn1[2], abcnn2=abcnn2[2])
 
         self.h_pool = tf.concat([branch_am_cnn_left, branch_am_cnn_right], 3)
         print(self.h_pool)
@@ -242,7 +252,7 @@ class ABCNN(object):
                 print(self.h_drop_1)
 
             with tf.name_scope("fc1"):
-                W_fc1 = tf.get_variable("W_fc1", shape=[512, 128], initializer=tf.contrib.layers.xavier_initializer())
+                W_fc1 = tf.get_variable("W_fc1", shape=[1536, 128], initializer=tf.contrib.layers.xavier_initializer())
                 # W_fc1 = tf.get_variable("W_fc1", shape=[3328, 128], initializer=tf.contrib.layers.xavier_initializer())
                 # W_fc1 = tf.get_variable("W_fc1", shape=[6400, 128], initializer=tf.contrib.layers.xavier_initializer())
                 b_fc1 = tf.Variable(tf.constant(0.1, shape=[128]), name="b_fc1")
@@ -310,8 +320,8 @@ class ABCNN(object):
     def cos_sim(self, v1, v2):
         # norm1 = tf.sqrt(tf.reduce_sum(tf.square(v1), axis=1))
         # norm2 = tf.sqrt(tf.reduce_sum(tf.square(v2), axis=1))
-        v1_normed = tf.nn.l2_normalize(v1, dim=1, name=None)
-        v2_normed = tf.nn.l2_normalize(v2, dim=1, name=None)
+        v1_normed = tf.nn.l2_normalize(v1, dim=2, name=None)
+        v2_normed = tf.nn.l2_normalize(v2, dim=2, name=None)
         # v1_normed = v1
         # v2_normed = v2
         # dot_products = tf.reduce_sum(v1 * v2, axis=1, name="cos_sim")
@@ -357,11 +367,12 @@ class ABCNN(object):
                 # pools.append(tf.reduce_sum(x[:, i:i + w, :, :] * attention[:, i:i + w, :, :],
                 #                            axis=2,
                 #                            keep_dims=True))
-                pools.append(tf.reduce_mean(x[:, i:i+w, :, :] * attention[:, i:i+w, :, :], axis=1, keep_dims=True))
+                pools.append(tf.reduce_sum(x[:, i:i+w, :, :] * attention[:, i:i+w, :, :], axis=1, keep_dims=True))
 
             # [batch, di, s, 1]
             # w_ap = tf.concat(pools, axis=2, name="w_ap")
-            w_ap = tf.reshape(tf.concat(pools, axis=0, name="w_ap"), shape=[-1, 100, tf.shape(x)[2], tf.shape(x)[3]])
+            # w_ap = tf.reshape(tf.concat(pools, axis=0, name="w_ap"), shape=[-1, 100, tf.shape(x)[2], tf.shape(x)[3]])
+            w_ap = tf.concat(pools, axis=1, name="w_ap")
             print(w_ap)
             w_ap = tf.cast(w_ap, tf.float32)
             print(w_ap)
@@ -369,15 +380,16 @@ class ABCNN(object):
             # [batch, di, s, 1]
         return w_ap
 
-    def branch_am_cnn(self, embedded_chars_expanded_left, embedded_chars_expanded_right, channel, width, filter_size, num_filters, conv_pad, pool_pad, name, abcnn1=False, abcnn2=False):
+    def branch_am_cnn(self, embedded_chars_expanded_left, embedded_chars_expanded_right, channel, width, filter_size,
+                      num_filters, conv_pad, pool_pad, name, left_len, right_len, abcnn1=False, abcnn2=False):
         # Apply ABCNN-1
         if abcnn1:
             with tf.name_scope('abcnn1_mat_'+name):
-                aW_left = tf.get_variable(name='aW_'+name+'_left', shape=(self.sequence_length_left, width),
+                aW_left = tf.get_variable(name='aW_'+name+'_left', shape=(left_len, width),
                                           initializer=tf.contrib.layers.xavier_initializer(),
                                           regularizer=tf.contrib.layers.l2_regularizer(
                                               scale=self.l2_reg_lambda))  # [batch, s, s]
-                aW_right = tf.get_variable(name='aW_'+name+'_right', shape=(self.sequence_length_right, width),
+                aW_right = tf.get_variable(name='aW_'+name+'_right', shape=(right_len, width),
                                            initializer=tf.contrib.layers.xavier_initializer(),
                                            regularizer=tf.contrib.layers.l2_regularizer(
                                                scale=self.l2_reg_lambda))  # [batch, s, s]
@@ -402,6 +414,7 @@ class ABCNN(object):
 
             # Apply nonlinearity
             h_left = tf.nn.relu(tf.nn.bias_add(conv, b), name='relu_'+name+'_left')
+            h_left = tf.transpose(h_left, perm=[0, 1, 3, 2])
 
         with tf.name_scope("conv-maxpool-"+name+'_right'):
             # Convolution Layer
@@ -413,6 +426,7 @@ class ABCNN(object):
 
             # Apply nonlinearity
             h_right = tf.nn.relu(tf.nn.bias_add(conv, b), name='relu_'+name+'_right')
+            h_right = tf.transpose(h_right, perm=[0, 1, 3, 2])
             print(h_right)
 
         # Apply ABCNN-2
