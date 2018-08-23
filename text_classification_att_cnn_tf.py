@@ -14,8 +14,7 @@ https://blog.csdn.net/u014029197/article/details/80348047
 # 0.82057434
 
 
-# 0.7083529150103558
-# 0.7507482252233845
+# 0.74
 """
 from __future__ import division
 import random
@@ -47,10 +46,10 @@ np.random.seed(2018)
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # Data loading path
-# tf.flags.DEFINE_string("train_data_file", "H:/tb/project0/quora/quora_duplicate_questions.tsv", "train data path.")
-# tf.flags.DEFINE_string("model_data_path", "H:/tb/project0/quora/model/", "model path for storing.")
-tf.flags.DEFINE_string("train_data_file", "E:/data/quora-duplicate/train.tsv", "train data path.")
-tf.flags.DEFINE_string("model_data_path", "E:/data/quora-duplicate/model/", "model path for storing.")
+tf.flags.DEFINE_string("train_data_file", "H:/tb/project0/quora/quora_duplicate_questions.tsv", "train data path.")
+tf.flags.DEFINE_string("model_data_path", "H:/tb/project0/quora/model/", "model path for storing.")
+# tf.flags.DEFINE_string("train_data_file", "E:/data/quora-duplicate/train.tsv", "train data path.")
+# tf.flags.DEFINE_string("model_data_path", "E:/data/quora-duplicate/model/", "model path for storing.")
 
 # Data loading params
 tf.flags.DEFINE_float("dev_sample_percentage", .1, "Percentage of the training data to use for validation")
@@ -76,7 +75,7 @@ tf.flags.DEFINE_integer("num_checkpoints", 5, "Number of checkpoints to store (d
 # Misc Parameters
 tf.flags.DEFINE_boolean("allow_soft_placement", True, "Allow device soft device placement")
 tf.flags.DEFINE_boolean("log_device_placement", False, "Log placement of ops on devices")
-tf.flags.DEFINE_string("last_layer", 'FC', "use FC or GAP in the end")
+tf.flags.DEFINE_string("last_layer", 'GAP', "use FC or GAP in the end")
 
 
 class Utils:
@@ -205,8 +204,8 @@ class ABCNN(object):
 
         channel_list = [1, 64, 128]
         filters_list = [64, 128, 64]
-        abcnn1 = [True, False, False]
-        abcnn2 = [True, False, False]
+        abcnn1 = [True, True, False]
+        abcnn2 = [False, False, False]
         branch_am_cnn_left, branch_am_cnn_right = \
             self.branch_am_cnn(self.embedded_chars_expanded_left, self.embedded_chars_expanded_right,
                                channel=(2 if abcnn1[0] else 1),
@@ -217,76 +216,97 @@ class ABCNN(object):
             self.branch_am_cnn(branch_am_cnn_left, branch_am_cnn_right,
                                channel=(2 if abcnn1[1] else 1),
                                width=channel_list[1], filter_size=3, num_filters=filters_list[1], conv_pad='VALID',
-                               pool_pad='VALID', name='conv_2', left_len=34, right_len=34,
+                               pool_pad='VALID', name='conv_2', left_len=self.sequence_length_left,
+                               right_len=self.sequence_length_right,
                                abcnn1=abcnn1[1], abcnn2=abcnn2[1])
         branch_am_cnn_left, branch_am_cnn_right = \
             self.branch_am_cnn(branch_am_cnn_left, branch_am_cnn_right,
                                channel=(2 if abcnn1[2] else 1),
                                width=channel_list[2], filter_size=3, num_filters=filters_list[2], conv_pad='VALID',
-                               pool_pad='VALID', name='conv_3', left_len=12, right_len=12,
+                               pool_pad='VALID', name='conv_3', left_len=self.sequence_length_left,
+                               right_len=self.sequence_length_right,
                                abcnn1=abcnn1[2], abcnn2=abcnn2[2])
 
-        self.h_pool = tf.concat([branch_am_cnn_left, branch_am_cnn_right], 3)
-        print(self.h_pool)
+        # self.h_pool = tf.concat([branch_am_cnn_left, branch_am_cnn_right], 3)
+        # print(self.h_pool)
+        # self.h_pool = tf.concat([branch_am_cnn_left, branch_am_cnn_right], 2)
+        # print(self.h_pool)
 
-        if FLAGS.last_layer == 'GAP':
-            # use GAP for softmax
-            with tf.name_scope("GAP1"):
-                filter_shape = [1, 1, 128, 2]
-                W = tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name='W_GAP')
-                # b = tf.Variable(tf.constant(0.1, shape=[2]), name='b_GAP')
-                conv = tf.nn.conv2d(self.h_pool, W, strides=[1, 1, 1, 1], padding='SAME', name='conv_GAP')
-                print(conv)
-                pool = tf.nn.avg_pool(conv, ksize=[1, 4, 1, 1], strides=[1, 1, 1, 1], padding='VALID')
-                print(pool)
-                self.scores_o = tf.reduce_mean(pool, axis=[1, 2])
-                print(self.scores_o)
-                self.predictions = tf.argmax(self.scores_o, 1, name="predictions")
-        else:
-            self.h_pool_flat = tf.contrib.layers.flatten(self.h_pool)
-            print(self.h_pool_flat)
+        with tf.name_scope("output"):
+            gap_pool_left = tf.nn.avg_pool(branch_am_cnn_left, ksize=[1, 100, 1, 1], strides=[1, 100, 1, 1], padding='SAME')
+            gap_pool_right = tf.nn.avg_pool(branch_am_cnn_right, ksize=[1, 100, 1, 1], strides=[1, 100, 1, 1], padding='SAME')
+            print(gap_pool_right)
+            pool_output = tf.concat([gap_pool_left, gap_pool_right], 2)
+            print(pool_output)
+            pool_output = tf.reduce_mean(pool_output, axis=[1, 3])
+            print(pool_output)
 
-            # Add dropout
-            with tf.name_scope("dropout1"):
-                self.h_drop_1 = tf.nn.dropout(self.h_pool_flat, self.dropout_keep_prob)
-                print(self.h_drop_1)
+            W_o = tf.get_variable("W_o", shape=[filters_list[2]*2, FLAGS.num_class], initializer=tf.contrib.layers.xavier_initializer())
+            b_o = tf.Variable(tf.constant(0.1, shape=[2]), name="b_o")
+            l2_loss += tf.nn.l2_loss(W_o)
+            l2_loss += tf.nn.l2_loss(b_o)
+            self.scores_o = tf.nn.xw_plus_b(pool_output, W_o, b_o, name="scores_o")
+            self.predictions = tf.argmax(self.scores_o, 1, name="predictions")
+            print(self.scores_o)
 
-            with tf.name_scope("fc1"):
-                W_fc1 = tf.get_variable("W_fc1", shape=[1536, 128], initializer=tf.contrib.layers.xavier_initializer())
-                # W_fc1 = tf.get_variable("W_fc1", shape=[3328, 128], initializer=tf.contrib.layers.xavier_initializer())
-                # W_fc1 = tf.get_variable("W_fc1", shape=[6400, 128], initializer=tf.contrib.layers.xavier_initializer())
-                b_fc1 = tf.Variable(tf.constant(0.1, shape=[128]), name="b_fc1")
-                # self.l2_loss_fc1 += tf.nn.l2_loss(W_fc1)
-                # self.l2_loss_fc1 += tf.nn.l2_loss(b_fc1)
-                self.z_fc1 = tf.nn.xw_plus_b(self.h_drop_1, W_fc1, b_fc1, name="scores_fc1")
-                self.o_fc1 = tf.nn.relu(self.z_fc1, name="relu_fc1")
-
-            # Add dropout
-            with tf.name_scope("dropout2"):
-                self.h_drop_2 = tf.nn.dropout(self.o_fc1, self.dropout_keep_prob)
-                print(self.h_drop_2)
-
-            with tf.name_scope("fc2"):
-                W_fc2 = tf.get_variable("W_fc2", shape=[128, 64], initializer=tf.contrib.layers.xavier_initializer())
-                b_fc2 = tf.Variable(tf.constant(0.1, shape=[64]), name="b_fc2")
-                self.z_fc2 = tf.nn.xw_plus_b(self.h_drop_2, W_fc2, b_fc2, name="scores_fc2")
-                self.o_fc2 = tf.nn.relu(self.z_fc2, name="relu_fc2")
-
-            # Add dropout
-            with tf.name_scope("dropout3"):
-                self.h_drop_3 = tf.nn.dropout(self.o_fc2, self.dropout_keep_prob)
-                print(self.h_drop_3)
-
-            # Final (unnormalized) scores and predictions
-            with tf.name_scope("output"):
-                W_o = tf.get_variable("W_o", shape=[64, self.num_classes], initializer=tf.contrib.layers.xavier_initializer())
-                b_o = tf.Variable(tf.constant(0.1, shape=[self.num_classes]), name="b_o")
-                l2_loss += tf.nn.l2_loss(W_o)
-                l2_loss += tf.nn.l2_loss(b_o)
-                # self.scores_o = tf.reshape(self.h_drop_2, [-1, 128])
-                self.scores_o = tf.nn.xw_plus_b(self.h_drop_3, W_o, b_o, name="scores_o")
-                self.predictions = tf.argmax(self.scores_o, 1, name="predictions")
-                print(self.scores_o)
+        # if FLAGS.last_layer == 'GAP':
+        #     # use GAP for softmax
+        #     with tf.name_scope("GAP1"):
+        #         filter_shape = [1, filters_list[2], 2, FLAGS.num_class]
+        #         W = tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name='W_GAP')
+        #         # b = tf.Variable(tf.constant(0.1, shape=[2]), name='b_GAP')
+        #         conv = tf.nn.conv2d(self.h_pool, W, strides=[1, 1, 1, 1], padding='SAME', name='conv_GAP')
+        #         print(conv)
+        #         pool = tf.nn.avg_pool(conv, ksize=[1, 12, 1, 2], strides=[1, 12, 1, 2], padding='SAME')
+        #         print(pool)
+        #         self.scores_o = tf.reduce_mean(pool, axis=[1, 2])
+        #         print(self.scores_o)
+        #         self.predictions = tf.argmax(self.scores_o, 1, name="predictions")
+        # else:
+        #     self.h_pool_flat = tf.contrib.layers.flatten(self.h_pool)
+        #     print(self.h_pool_flat)
+        #
+        #     # Add dropout
+        #     with tf.name_scope("dropout1"):
+        #         self.h_drop_1 = tf.nn.dropout(self.h_pool_flat, self.dropout_keep_prob)
+        #         print(self.h_drop_1)
+        #
+        #     with tf.name_scope("fc1"):
+        #         W_fc1 = tf.get_variable("W_fc1", shape=[1536, 128], initializer=tf.contrib.layers.xavier_initializer())
+        #         # W_fc1 = tf.get_variable("W_fc1", shape=[3328, 128], initializer=tf.contrib.layers.xavier_initializer())
+        #         # W_fc1 = tf.get_variable("W_fc1", shape=[6400, 128], initializer=tf.contrib.layers.xavier_initializer())
+        #         b_fc1 = tf.Variable(tf.constant(0.1, shape=[128]), name="b_fc1")
+        #         # self.l2_loss_fc1 += tf.nn.l2_loss(W_fc1)
+        #         # self.l2_loss_fc1 += tf.nn.l2_loss(b_fc1)
+        #         self.z_fc1 = tf.nn.xw_plus_b(self.h_drop_1, W_fc1, b_fc1, name="scores_fc1")
+        #         self.o_fc1 = tf.nn.relu(self.z_fc1, name="relu_fc1")
+        #
+        #     # Add dropout
+        #     with tf.name_scope("dropout2"):
+        #         self.h_drop_2 = tf.nn.dropout(self.o_fc1, self.dropout_keep_prob)
+        #         print(self.h_drop_2)
+        #
+        #     with tf.name_scope("fc2"):
+        #         W_fc2 = tf.get_variable("W_fc2", shape=[128, 64], initializer=tf.contrib.layers.xavier_initializer())
+        #         b_fc2 = tf.Variable(tf.constant(0.1, shape=[64]), name="b_fc2")
+        #         self.z_fc2 = tf.nn.xw_plus_b(self.h_drop_2, W_fc2, b_fc2, name="scores_fc2")
+        #         self.o_fc2 = tf.nn.relu(self.z_fc2, name="relu_fc2")
+        #
+        #     # Add dropout
+        #     with tf.name_scope("dropout3"):
+        #         self.h_drop_3 = tf.nn.dropout(self.o_fc2, self.dropout_keep_prob)
+        #         print(self.h_drop_3)
+        #
+        #     # Final (unnormalized) scores and predictions
+        #     with tf.name_scope("output"):
+        #         W_o = tf.get_variable("W_o", shape=[64, self.num_classes], initializer=tf.contrib.layers.xavier_initializer())
+        #         b_o = tf.Variable(tf.constant(0.1, shape=[self.num_classes]), name="b_o")
+        #         l2_loss += tf.nn.l2_loss(W_o)
+        #         l2_loss += tf.nn.l2_loss(b_o)
+        #         # self.scores_o = tf.reshape(self.h_drop_2, [-1, 128])
+        #         self.scores_o = tf.nn.xw_plus_b(self.h_drop_3, W_o, b_o, name="scores_o")
+        #         self.predictions = tf.argmax(self.scores_o, 1, name="predictions")
+        #         print(self.scores_o)
 
         # Accuracy
         with tf.name_scope("accuracy"):
@@ -298,6 +318,9 @@ class ABCNN(object):
             losses = tf.nn.softmax_cross_entropy_with_logits(logits=self.scores_o, labels=self.input_y)
             # self.loss = tf.reduce_mean(losses) + self.l2_reg_lambda * l2_loss
             self.loss = tf.reduce_mean(losses)
+
+            # tf.losses.log_loss(labels=self.input_y, predictions=self.scores_o, loss_collection=tf.GraphKeys.LOSSES)
+            # self.loss = tf.losses.get_losses(scope=None, loss_collection=tf.GraphKeys.LOSSES)
 
     def set_placeholder(self):
         # Placeholders for input, output and dropout
@@ -452,8 +475,8 @@ class ABCNN(object):
                 pooled_right = self.w_pool_att(h_right, tf.transpose(att_mat, [0, 2, 1]), w=filter_size, variable_scope='abcnn2_pool_'+name+'_right')
         else:
             # Maxpooling over the outputs
-            pooled_left = tf.nn.avg_pool(h_left, ksize=[1, filter_size, 1, 1], strides=[1, filter_size, 1, 1], padding=pool_pad, name='pool_'+name+'_left')
-            pooled_right = tf.nn.avg_pool(h_right, ksize=[1, filter_size, 1, 1], strides=[1, filter_size, 1, 1], padding=pool_pad, name='pool_'+name+'_right')
+            pooled_left = tf.nn.avg_pool(h_left, ksize=[1, filter_size, 1, 1], strides=[1, 1, 1, 1], padding=pool_pad, name='pool_'+name+'_left')
+            pooled_right = tf.nn.avg_pool(h_right, ksize=[1, filter_size, 1, 1], strides=[1, 1, 1, 1], padding=pool_pad, name='pool_'+name+'_right')
         print(pooled_left)
         print(pooled_right)
         return pooled_left, pooled_right
