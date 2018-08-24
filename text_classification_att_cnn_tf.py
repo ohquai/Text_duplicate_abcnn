@@ -41,15 +41,20 @@ import tensorflow as tf
 FLAGS = tf.flags.FLAGS
 from tensorflow.contrib import learn
 # from attention_context import AttentionWithContext
+from nltk.corpus import stopwords
+from nltk.stem import SnowballStemmer
+import re
+from string import punctuation
 random.seed(2018)
 np.random.seed(2018)
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 
 # Data loading path
-tf.flags.DEFINE_string("train_data_file", "H:/tb/project0/quora/quora_duplicate_questions.tsv", "train data path.")
-tf.flags.DEFINE_string("model_data_path", "H:/tb/project0/quora/model/", "model path for storing.")
+# tf.flags.DEFINE_string("train_data_file", "H:/tb/project0/quora/quora_duplicate_questions.tsv", "train data path.")
+# tf.flags.DEFINE_string("model_data_path", "H:/tb/project0/quora/model/", "model path for storing.")
 # tf.flags.DEFINE_string("train_data_file", "E:/data/quora-duplicate/train.tsv", "train data path.")
-# tf.flags.DEFINE_string("model_data_path", "E:/data/quora-duplicate/model/", "model path for storing.")
+tf.flags.DEFINE_string("train_data_file", "E:/data/quora-duplicate/train.csv", "train data path.")
+tf.flags.DEFINE_string("model_data_path", "E:/data/quora-duplicate/model/", "model path for storing.")
 
 # Data loading params
 tf.flags.DEFINE_float("dev_sample_percentage", .1, "Percentage of the training data to use for validation")
@@ -60,7 +65,7 @@ tf.flags.DEFINE_string("negative_data_file", "./data/rt-polaritydata/rt-polarity
 tf.flags.DEFINE_integer("num_class", 2, "number of classes (default: 2)")
 tf.flags.DEFINE_float("lr", 0.002, "learning rate (default: 0.002)")
 tf.flags.DEFINE_integer("embedding_dim", 150, "Dimensionality of character embedding (default: 128)")
-tf.flags.DEFINE_integer("sentence_len", 50, "Maximum length for sentence pair (default: 50)")
+tf.flags.DEFINE_integer("sentence_len", 20, "Maximum length for sentence pair (default: 50)")
 tf.flags.DEFINE_string("filter_sizes", "3,4,5", "Comma-separated filter sizes (default: '3,4,5')")
 tf.flags.DEFINE_integer("num_filters", 128, "Number of filters per filter size (default: 128)")
 tf.flags.DEFINE_float("dropout_keep_prob", 0.5, "Dropout keep probability (default: 0.5)")
@@ -114,11 +119,109 @@ class DataHelpers:
     def flatten(self, l):
         return [item for sublist in l for item in sublist]
 
+    def text_to_wordlist(self, text, remove_stop_words=True, stem_words=False):
+        # Clean the text, with the option to remove stop_words and to stem words.
+        stop_words = ['the', 'a', 'an', 'and', 'but', 'if', 'or', 'because', 'as', 'what', 'which', 'this', 'that',
+                      'these', 'those', 'then',
+                      'just', 'so', 'than', 'such', 'both', 'through', 'about', 'for', 'is', 'of', 'while', 'during',
+                      'to', 'What', 'Which',
+                      'Is', 'If', 'While', 'This']
+
+        # Clean the text
+        text = re.sub(r"[^A-Za-z0-9]", " ", text)
+        text = re.sub(r"what's", "", text)
+        text = re.sub(r"What's", "", text)
+        text = re.sub(r"\'s", " ", text)
+        text = re.sub(r"\'ve", " have ", text)
+        text = re.sub(r"can't", "cannot ", text)
+        text = re.sub(r"n't", " not ", text)
+        text = re.sub(r"I'm", "I am", text)
+        text = re.sub(r" m ", " am ", text)
+        text = re.sub(r"\'re", " are ", text)
+        text = re.sub(r"\'d", " would ", text)
+        text = re.sub(r"\'ll", " will ", text)
+        text = re.sub(r"60k", " 60000 ", text)
+        text = re.sub(r" e g ", " eg ", text)
+        text = re.sub(r" b g ", " bg ", text)
+        text = re.sub(r"\0s", "0", text)
+        text = re.sub(r" 9 11 ", "911", text)
+        text = re.sub(r"e-mail", "email", text)
+        text = re.sub(r"\s{2,}", " ", text)
+        text = re.sub(r"quikly", "quickly", text)
+        text = re.sub(r" usa ", " America ", text)
+        text = re.sub(r" USA ", " America ", text)
+        text = re.sub(r" u s ", " America ", text)
+        text = re.sub(r" uk ", " England ", text)
+        text = re.sub(r" UK ", " England ", text)
+        text = re.sub(r"india", "India", text)
+        text = re.sub(r"switzerland", "Switzerland", text)
+        text = re.sub(r"china", "China", text)
+        text = re.sub(r"chinese", "Chinese", text)
+        text = re.sub(r"imrovement", "improvement", text)
+        text = re.sub(r"intially", "initially", text)
+        text = re.sub(r"quora", "Quora", text)
+        text = re.sub(r" dms ", "direct messages ", text)
+        text = re.sub(r"demonitization", "demonetization", text)
+        text = re.sub(r"actived", "active", text)
+        text = re.sub(r"kms", " kilometers ", text)
+        text = re.sub(r"KMs", " kilometers ", text)
+        text = re.sub(r" cs ", " computer science ", text)
+        text = re.sub(r" upvotes ", " up votes ", text)
+        text = re.sub(r" iPhone ", " phone ", text)
+        text = re.sub(r"\0rs ", " rs ", text)
+        text = re.sub(r"calender", "calendar", text)
+        text = re.sub(r"ios", "operating system", text)
+        text = re.sub(r"gps", "GPS", text)
+        text = re.sub(r"gst", "GST", text)
+        text = re.sub(r"programing", "programming", text)
+        text = re.sub(r"bestfriend", "best friend", text)
+        text = re.sub(r"dna", "DNA", text)
+        text = re.sub(r"III", "3", text)
+        text = re.sub(r"the US", "America", text)
+        text = re.sub(r"Astrology", "astrology", text)
+        text = re.sub(r"Method", "method", text)
+        text = re.sub(r"Find", "find", text)
+        text = re.sub(r"banglore", "Banglore", text)
+        text = re.sub(r" J K ", " JK ", text)
+
+        # Remove punctuation from text
+        text = ''.join([c for c in text if c not in punctuation])
+
+        # Optionally, remove stop words
+        if remove_stop_words:
+            text = text.split()
+            text = [w for w in text if not w in stop_words]
+            text = " ".join(text)
+
+        # Optionally, shorten words to their stems
+        if stem_words:
+            text = text.split()
+            stemmer = SnowballStemmer('english')
+            stemmed_words = [stemmer.stem(word) for word in text]
+            text = " ".join(stemmed_words)
+
+        # Return a list of words
+        return (text)
+
+    def process_questions(self, question_list, questions, question_list_name, dataframe):
+        '''transform questions and display progress'''
+        for question in questions:
+            question_list.append(self.text_to_wordlist(question))
+            if len(question_list) % 100000 == 0:
+                progress = len(question_list) / len(dataframe) * 100
+                print("{} is {}% complete.".format(question_list_name, round(progress, 1)))
+        return question_list
+
     def data_cleaning(self, data):
         data['question1'] = data['question1'].str.lower()
         data['question1'].fillna(value="nan", inplace=True)
         data['question2'] = data['question2'].str.lower()
         data['question2'].fillna(value="nan", inplace=True)
+
+        train_question1 = []
+        data.question1 = self.process_questions(train_question1, data.question1, 'train_question1', data)
+        train_question2 = []
+        data.question2 = self.process_questions(train_question2, data.question2, 'train_question2', data)
 
         # f1 = lambda a: re.sub(r'(@.*? )', '', a)
         # f2 = lambda a: re.sub(r'(@.*?$)', '', a)
@@ -204,7 +307,7 @@ class ABCNN(object):
 
         channel_list = [1, 64, 128]
         filters_list = [64, 128, 64]
-        abcnn1 = [True, True, False]
+        abcnn1 = [True, False, False]
         abcnn2 = [False, False, False]
         branch_am_cnn_left, branch_am_cnn_right = \
             self.branch_am_cnn(self.embedded_chars_expanded_left, self.embedded_chars_expanded_right,
@@ -233,8 +336,8 @@ class ABCNN(object):
         # print(self.h_pool)
 
         with tf.name_scope("output"):
-            gap_pool_left = tf.nn.avg_pool(branch_am_cnn_left, ksize=[1, 100, 1, 1], strides=[1, 100, 1, 1], padding='SAME')
-            gap_pool_right = tf.nn.avg_pool(branch_am_cnn_right, ksize=[1, 100, 1, 1], strides=[1, 100, 1, 1], padding='SAME')
+            gap_pool_left = tf.nn.avg_pool(branch_am_cnn_left, ksize=[1, FLAGS.sentence_len, 1, 1], strides=[1, FLAGS.sentence_len, 1, 1], padding='SAME')
+            gap_pool_right = tf.nn.avg_pool(branch_am_cnn_right, ksize=[1, FLAGS.sentence_len, 1, 1], strides=[1, FLAGS.sentence_len, 1, 1], padding='SAME')
             print(gap_pool_right)
             pool_output = tf.concat([gap_pool_left, gap_pool_right], 2)
             print(pool_output)
@@ -246,6 +349,7 @@ class ABCNN(object):
             l2_loss += tf.nn.l2_loss(W_o)
             l2_loss += tf.nn.l2_loss(b_o)
             self.scores_o = tf.nn.xw_plus_b(pool_output, W_o, b_o, name="scores_o")
+            self.scores_o = tf.nn.sigmoid(self.scores_o)
             self.predictions = tf.argmax(self.scores_o, 1, name="predictions")
             print(self.scores_o)
 
@@ -315,12 +419,17 @@ class ABCNN(object):
 
         # Calculate mean cross-entropy loss
         with tf.name_scope("loss"):
-            losses = tf.nn.softmax_cross_entropy_with_logits(logits=self.scores_o, labels=self.input_y)
+            # losses = tf.nn.softmax_cross_entropy_with_logits(logits=self.scores_o, labels=self.input_y)
             # self.loss = tf.reduce_mean(losses) + self.l2_reg_lambda * l2_loss
-            self.loss = tf.reduce_mean(losses)
+            # self.loss = tf.reduce_mean(losses)
 
-            # tf.losses.log_loss(labels=self.input_y, predictions=self.scores_o, loss_collection=tf.GraphKeys.LOSSES)
+            self.loss = tf.losses.log_loss(labels=self.input_y, predictions=self.scores_o, loss_collection=tf.GraphKeys.LOSSES)
             # self.loss = tf.losses.get_losses(scope=None, loss_collection=tf.GraphKeys.LOSSES)
+            # self.loss = tf.contrib.losses.log_loss(labels=self.input_y, predictions=self.scores_o)
+            # self.loss = tf.contrib.losses.add_loss(
+            #     tf.contrib.losses.log_loss(self.input_y, self.scores_o),
+            #     loss_collection=tf.GraphKeys.LOSSES
+            # )
 
     def set_placeholder(self):
         # Placeholders for input, output and dropout
@@ -385,7 +494,7 @@ class ABCNN(object):
             attention = tf.expand_dims(tf.expand_dims(col_wise_sum, -1), -1)
             print(attention)
 
-            for i in range(100):
+            for i in range(FLAGS.sentence_len):
                 # [batch, di, w, 1], [batch, 1, w, 1] => [batch, di, 1, 1]
                 # pools.append(tf.reduce_sum(x[:, i:i + w, :, :] * attention[:, i:i + w, :, :],
                 #                            axis=2,
@@ -500,6 +609,8 @@ class Train:
                 optimizer = tf.train.AdamOptimizer(learning_rate=FLAGS.lr)
                 grads_and_vars = optimizer.compute_gradients(cnn.loss)
                 train_op = optimizer.apply_gradients(grads_and_vars, global_step=global_step)
+                # train_op = tf.train.AdamOptimizer(learning_rate=FLAGS.lr, beta1=0.9, beta2=0.999,
+                #                                         epsilon=1e-8).minimize(cnn.loss)
 
                 # Keep track of gradient values and sparsity (optional)
                 grad_summaries = []
@@ -587,14 +698,17 @@ class Train:
                     if current_step % FLAGS.evaluate_every == 0:
                         dev_batches = DataHelpers().batch_iter(list(zip(x_left_dev, x_right_dev, y_dev)), FLAGS.batch_size, 1)
                         total_dev_correct = 0
+                        total_dev_loss = 0
                         print("\nEvaluation:")
                         for dev_batch in dev_batches:
                             x_left_dev_batch, x_right_dev_batch, y_dev_batch = zip(*dev_batch)
                             loss, dev_correct = dev_step(x_left_dev_batch, x_right_dev_batch, y_dev_batch)
                             total_dev_correct += dev_correct * len(y_dev_batch)
+                            total_dev_loss += loss * len(y_dev_batch)
                             # dev_step(x_left_dev, x_right_dev, y_dev, writer=dev_summary_writer)
                         dev_accuracy = float(total_dev_correct) / len(y_dev)
-                        print('Accuracy on dev set: {0}'.format(dev_accuracy))
+                        dev_loss = float(total_dev_loss) / len(y_dev)
+                        print('Accuracy on dev set: {0}, loss on dev set: {1}'.format(dev_accuracy, dev_loss))
                         print("Evaluation finished")
                     if current_step % FLAGS.checkpoint_every == 0:
                         path = saver.save(sess, checkpoint_prefix, global_step=current_step)
@@ -602,7 +716,9 @@ class Train:
 
     def preprocess(self):
         # 读取训练数据
-        data = pd.read_csv(FLAGS.train_data_file, sep="\t", error_bad_lines=False)
+        data = pd.read_csv(FLAGS.train_data_file, sep=",", error_bad_lines=False)
+        data = data.fillna('empty')
+
         print(pd.value_counts(data['is_duplicate']))
 
         # 数据清洗
@@ -610,8 +726,8 @@ class Train:
 
         # Build vocabulary
         # max_document_length = max([len(x.split(" ")) for x in x_text])
-        max_document_length = 100
-        vocab_processor = learn.preprocessing.VocabularyProcessor(max_document_length, min_frequency=3)
+        max_document_length = FLAGS.sentence_len
+        vocab_processor = learn.preprocessing.VocabularyProcessor(max_document_length, min_frequency=2)
         vocab_processor.fit(data['question1'] + data['question2'])
         # x = np.array(list(vocab_processor.fit_transform(x_text)))
         x_left = np.array(list(vocab_processor.transform(data['question1'])))
