@@ -1,47 +1,20 @@
 # -*- coding:utf-8 -*-
 """
-Seamese architecture
-https://blog.csdn.net/u014029197/article/details/80348047
-# 0.725790893
-# 0.765316975
-# 0.779762052
-# 0.787306142
-# 0.796161171
-# 0.801479136
-# 0.80820698
-# 0.812782903
-# 0.815157436
-# 0.82057434
-
-
-# 0.74
+Seamese architecture+abcnn
 """
 from __future__ import division
 import random
-import cv2
 import os
-import re
 import time
 import datetime
 import numpy as np
 import pandas as pd
-from nltk.corpus import stopwords
-import keras.backend as K
-from scipy import interp
-from time import sleep
 from matplotlib import pyplot as plt
 from sklearn.metrics import accuracy_score, precision_recall_fscore_support, confusion_matrix, roc_curve, auc
-from sklearn.preprocessing import label_binarize
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
 from keras.utils import to_categorical
-from keras.preprocessing.text import Tokenizer
-from keras.preprocessing.sequence import pad_sequences
 import tensorflow as tf
 FLAGS = tf.flags.FLAGS
 from tensorflow.contrib import learn
-# from attention_context import AttentionWithContext
-from nltk.corpus import stopwords
 from nltk.stem import SnowballStemmer
 import re
 from string import punctuation
@@ -80,7 +53,7 @@ tf.flags.DEFINE_integer("num_checkpoints", 5, "Number of checkpoints to store (d
 # Misc Parameters
 tf.flags.DEFINE_boolean("allow_soft_placement", True, "Allow device soft device placement")
 tf.flags.DEFINE_boolean("log_device_placement", False, "Log placement of ops on devices")
-tf.flags.DEFINE_string("last_layer", 'GAP', "use FC or GAP in the end")
+tf.flags.DEFINE_string("last_layer", 'FC', "Use FC or GAP as the last layer")
 
 
 class Utils:
@@ -223,20 +196,6 @@ class DataHelpers:
         train_question2 = []
         data.question2 = self.process_questions(train_question2, data.question2, 'train_question2', data)
 
-        # f1 = lambda a: re.sub(r'(@.*? )', '', a)
-        # f2 = lambda a: re.sub(r'(@.*?$)', '', a)
-        # f3 = lambda a: re.sub(' +', ' ', a)
-        # data['SentimentText'] = data['SentimentText'].apply(f1)
-        # data['SentimentText'] = data['SentimentText'].apply(f2)
-        # data['SentimentText'] = data['SentimentText'].apply(f3)
-
-        # english_stopwords = stopwords.words('english')
-        # list_senti = []
-        # for row in data['SentimentText']:
-        #     senti = [' '.join(a for a in row.split(' ') if a not in english_stopwords)]
-        #     list_senti.append(senti)
-        # data['SentimentText'] = list_senti
-
         return data
 
     def batch_iter(self, data, batch_size, num_epochs, shuffle=True):
@@ -329,11 +288,6 @@ class ABCNN(object):
                                pool_pad='VALID', name='conv_3', left_len=self.sequence_length_left,
                                right_len=self.sequence_length_right,
                                abcnn1=abcnn1[2], abcnn2=abcnn2[2])
-
-        # self.h_pool = tf.concat([branch_am_cnn_left, branch_am_cnn_right], 3)
-        # print(self.h_pool)
-        # self.h_pool = tf.concat([branch_am_cnn_left, branch_am_cnn_right], 2)
-        # print(self.h_pool)
 
         with tf.name_scope("output"):
             gap_pool_left = tf.nn.avg_pool(branch_am_cnn_left, ksize=[1, FLAGS.sentence_len, 1, 1], strides=[1, FLAGS.sentence_len, 1, 1], padding='SAME')
@@ -450,29 +404,16 @@ class ABCNN(object):
         return 1 / (1 + euclidean)
 
     def cos_sim(self, v1, v2):
-        # norm1 = tf.sqrt(tf.reduce_sum(tf.square(v1), axis=1))
-        # norm2 = tf.sqrt(tf.reduce_sum(tf.square(v2), axis=1))
         v1_normed = tf.nn.l2_normalize(v1, dim=2, name=None)
         v2_normed = tf.nn.l2_normalize(v2, dim=2, name=None)
-        # v1_normed = v1
-        # v2_normed = v2
-        # dot_products = tf.reduce_sum(v1 * v2, axis=1, name="cos_sim")
-        # dot_products = tf.matmul(tf.reshape(v1_normed,
-        #                                     shape=(-1, self.sequence_length_left, self.embedding_size)),
-        #                          tf.reshape(tf.transpose(v2_normed, perm=[0, 2, 1, 3]),
-        #                                     shape=(-1, self.embedding_size, self.sequence_length_right)))
-        # dot_products = tf.matmul(tf.reshape(v1_normed,
-        #                                     shape=(-1, tf.shape(v1)[1], tf.shape(v1)[2])),
-        #                          tf.reshape(tf.transpose(v2_normed, perm=[0, 2, 1, 3]),
-        #                                     shape=(-1, tf.shape(v2)[2], tf.shape(v2)[1])))
 
-        dot_products = tf.reduce_mean(tf.transpose(tf.matmul(tf.transpose(v1_normed, perm=[0, 3, 1, 2]), tf.transpose(v2_normed, perm=[0, 3, 2, 1])),
-                                    perm=[0, 2, 3, 1]), axis=3)
+        dot_products = tf.reduce_mean(tf.transpose(tf.matmul(tf.transpose(v1_normed, perm=[0, 3, 1, 2]),
+                                                             tf.transpose(v2_normed, perm=[0, 3, 2, 1])),
+                                                   perm=[0, 2, 3, 1]), axis=3)
         print("cos_sim")
         print(v1_normed)
         print(dot_products)
         return dot_products
-        # return dot_products / (norm1 * norm2)
 
     def euclidean_score(self, v1, v2):
         euclidean = tf.sqrt(tf.reduce_sum(tf.square(v1 - v2), axis=1))
@@ -484,32 +425,22 @@ class ABCNN(object):
         # attention: [batch, s+w-1]
         with tf.variable_scope(variable_scope):
             print("col_wise_sum")
-            sen_length = tf.shape(x)[1]
             pools = []
             # [batch, s+w-1] => [batch, 1, s+w-1, 1]
             print(attention)
             col_wise_sum = tf.reduce_sum(attention, axis=2)
             print(col_wise_sum)
-            # attention = tf.transpose(tf.expand_dims(tf.expand_dims(attention, -1), -1), [0, 2, 1, 3])
             attention = tf.expand_dims(tf.expand_dims(col_wise_sum, -1), -1)
             print(attention)
 
             for i in range(FLAGS.sentence_len):
-                # [batch, di, w, 1], [batch, 1, w, 1] => [batch, di, 1, 1]
-                # pools.append(tf.reduce_sum(x[:, i:i + w, :, :] * attention[:, i:i + w, :, :],
-                #                            axis=2,
-                #                            keep_dims=True))
                 pools.append(tf.reduce_sum(x[:, i:i+w, :, :] * attention[:, i:i+w, :, :], axis=1, keep_dims=True))
 
-            # [batch, di, s, 1]
-            # w_ap = tf.concat(pools, axis=2, name="w_ap")
-            # w_ap = tf.reshape(tf.concat(pools, axis=0, name="w_ap"), shape=[-1, 100, tf.shape(x)[2], tf.shape(x)[3]])
             w_ap = tf.concat(pools, axis=1, name="w_ap")
             print(w_ap)
             w_ap = tf.cast(w_ap, tf.float32)
             print(w_ap)
 
-            # [batch, di, s, 1]
         return w_ap
 
     def branch_am_cnn(self, embedded_chars_expanded_left, embedded_chars_expanded_right, channel, width, filter_size,
@@ -564,21 +495,7 @@ class ABCNN(object):
         # Apply ABCNN-2
         if abcnn2:
             with tf.name_scope('abcnn2_mat_' + name):
-                # aW_left = tf.get_variable(name="aW_left", shape=(self.sequence_length_right, width),
-                #                           initializer=tf.contrib.layers.xavier_initializer(),
-                #                           regularizer=tf.contrib.layers.l2_regularizer(
-                #                               scale=self.l2_reg_lambda))  # [batch, s, s]
-                # aW_right = tf.get_variable(name="aW_right", shape=(self.sequence_length_left, width),
-                #                            initializer=tf.contrib.layers.xavier_initializer(),
-                #                            regularizer=tf.contrib.layers.l2_regularizer(
-                #                                scale=self.l2_reg_lambda))  # [batch, s, s]
                 att_mat = self.cos_sim(h_left, h_right)  # [batch, s, s]
-
-                # x1_a = tf.expand_dims(tf.einsum("ijk,kl->ijl", att_mat, aW_left), -1)
-                # x2_a = tf.expand_dims(tf.einsum("ijk,kl->ijl", tf.matrix_transpose(att_mat), aW_right), -1)
-
-                # pooled_left = tf.concat([h_left, x1_a], axis=3)
-                # pooled_right = tf.concat([h_right, x2_a], axis=3)
 
                 pooled_left = self.w_pool_att(h_left, att_mat, w=filter_size, variable_scope='abcnn2_pool_'+name+'_left')
                 pooled_right = self.w_pool_att(h_right, tf.transpose(att_mat, [0, 2, 1]), w=filter_size, variable_scope='abcnn2_pool_'+name+'_right')
@@ -753,135 +670,3 @@ if __name__ == '__main__':
     obj_train = Train()
     x_left_train, x_right_train, y_train, x_left_dev, x_right_dev, y_dev, vocab_processor = obj_train.preprocess()
     obj_train.train(x_left_train, x_right_train, y_train, x_left_dev, x_right_dev, y_dev, vocab_processor)
-
-    # with tf.name_scope("att_mat"):
-    #     # x1_expanded = tf.expand_dims(self.x1, -1)
-    #     # x2_expanded = tf.expand_dims(self.x2, -1)
-    #
-    #     # aW = tf.get_variable(name="aW_left", shape=(self.sequence_length_left, self.sequence_length_right),
-    #     #                      initializer=tf.contrib.layers.xavier_initializer(),
-    #     #                      regularizer=tf.contrib.layers.l2_regularizer(scale=self.l2_reg_lambda))  # [batch, s, s]
-    #     aW_left = tf.get_variable(name="aW_left", shape=(self.sequence_length_right, self.embedding_size),
-    #                               initializer=tf.contrib.layers.xavier_initializer(),
-    #                               regularizer=tf.contrib.layers.l2_regularizer(
-    #                                   scale=self.l2_reg_lambda))  # [batch, s, s]
-    #     aW_right = tf.get_variable(name="aW_right", shape=(self.sequence_length_left, self.embedding_size),
-    #                               initializer=tf.contrib.layers.xavier_initializer(),
-    #                               regularizer=tf.contrib.layers.l2_regularizer(
-    #                                   scale=self.l2_reg_lambda))  # [batch, s, s]
-    #     # att_mat = self.make_attention_mat(self.embedded_chars_expanded_left, self.embedded_chars_expanded_right)
-    #     att_mat = self.cos_sim(self.embedded_chars_expanded_left, self.embedded_chars_expanded_right)  # [batch, s, s]
-    #
-    #     # [batch, s, s] * [s,d] => [batch, s, d]
-    #     # matrix transpose => [batch, d, s]
-    #     # expand dims => [batch, d, s, 1]
-    #     print(att_mat)
-    #     print(aW_left)
-    #     print(aW_right)
-    #     # x1_a = tf.expand_dims(tf.matrix_transpose(tf.einsum("ijk,kl->ijl", att_mat, aW)), -1)
-    #     # x2_a = tf.expand_dims(tf.matrix_transpose(tf.einsum("ijk,kl->ijl", tf.matrix_transpose(att_mat), aW)), -1)
-    #     x1_a = tf.expand_dims(tf.einsum("ijk,kl->ijl", att_mat, aW_left), -1)
-    #     x2_a = tf.expand_dims(tf.einsum("ijk,kl->ijl", tf.matrix_transpose(att_mat), aW_right), -1)
-    #
-    #     print(x1_a)
-    #     print(x2_a)
-    #     # [batch, d, s, 2]
-    #     self.embedded_chars_expanded_left = tf.concat([self.embedded_chars_expanded_left, x1_a], axis=3)
-    #     self.embedded_chars_expanded_right = tf.concat([self.embedded_chars_expanded_right, x2_a], axis=3)
-
-    # def branch_am_cnn(self, embedded_chars_expanded):
-    #     filter_size_1, filter_size_2, filter_size_3 = 3, 3, 3
-    #     num_filters_1, num_filters_2, num_filters_3 = 64, 128, 128
-    #     with tf.name_scope("conv-maxpool-%s" % filter_size_1):
-    #         # Convolution Layer
-    #         filter_shape = [filter_size_1, self.embedding_size, 2, num_filters_1]
-    #         W = tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name="W")
-    #         b = tf.Variable(tf.constant(0.1, shape=[num_filters_1]), name="b")
-    #         embedded_chars_expanded = self.pad_for_wide_conv(embedded_chars_expanded, filter_size_1)
-    #         # conv = tf.nn.conv2d(embedded_chars_expanded, W, strides=[1, 1, self.embedding_size, 1], padding="SAME", name="conv1")
-    #         conv = tf.nn.conv2d(embedded_chars_expanded, W, strides=[1, 1, self.embedding_size, 1], padding="VALID", name="conv1")
-    #         print(conv)
-    #         # Apply nonlinearity
-    #         h = tf.nn.relu(tf.nn.bias_add(conv, b), name="relu1")
-    #
-    #         # Maxpooling over the outputs
-    #         # pooled = tf.nn.max_pool(h, ksize=[1, self.sequence_length_left - filter_size_1 + 1, 1, 1], strides=[1, 1, 1, 1], padding='VALID', name="pool")
-    #         pooled = tf.nn.max_pool(h, ksize=[1, filter_size_1, 1, 1], strides=[1, 2, 1, 1], padding='VALID', name="pool1")
-    #         print(h)
-    #         print(pooled)
-    #         # pooled_outputs.append(pooled)
-    #
-    #     with tf.name_scope("conv-maxpool-%s" % filter_size_2):
-    #         # Convolution Layer
-    #         # filter_shape = [filter_size_2, self.embedding_size, 1, num_filters_2]
-    #         filter_shape = [filter_size_2, 1, num_filters_1, num_filters_2]
-    #         W = tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name="W")
-    #         b = tf.Variable(tf.constant(0.1, shape=[num_filters_2]), name="b")
-    #         # conv = tf.nn.conv2d(pooled, W, strides=[1, 1, 1, 1], padding="SAME", name="conv2")
-    #         pooled = self.pad_for_wide_conv(pooled, filter_size_1)
-    #         conv = tf.nn.conv2d(pooled, W, strides=[1, 1, 1, 1], padding="VALID", name="conv2")
-    #         # Apply nonlinearity
-    #         h = tf.nn.relu(tf.nn.bias_add(conv, b), name="relu2")
-    #         # Maxpooling over the outputs
-    #         # pooled = tf.nn.max_pool(h, ksize=[1, self.sequence_length_left - filter_size_2 + 1, 1, 1], strides=[1, 1, 1, 1], padding='VALID', name="pool")
-    #         pooled = tf.nn.max_pool(h, ksize=[1, filter_size_2, 1, 1], strides=[1, 2, 1, 1], padding='VALID', name="pool2")
-    #         print(h)
-    #         print(pooled)
-    #
-    #     with tf.name_scope("conv-maxpool-%s" % filter_size_3):
-    #         # Convolution Layer
-    #         # filter_shape = [filter_size_3, self.embedding_size, 1, num_filters_3]
-    #         filter_shape = [filter_size_3, 1, num_filters_2, num_filters_3]
-    #         W = tf.Variable(tf.truncated_normal(filter_shape, stddev=0.1), name="W")
-    #         b = tf.Variable(tf.constant(0.1, shape=[num_filters_3]), name="b")
-    #         pooled = self.pad_for_wide_conv(pooled, filter_size_1)
-    #         # conv = tf.nn.conv2d(pooled, W, strides=[1, 1, 1, 1], padding="SAME", name="conv3")
-    #         conv = tf.nn.conv2d(pooled, W, strides=[1, 1, 1, 1], padding="VALID", name="conv3")
-    #         # Apply nonlinearity
-    #         h = tf.nn.relu(tf.nn.bias_add(conv, b), name="relu3")
-    #         # Maxpooling over the outputs
-    #         # pooled = tf.nn.max_pool(h, ksize=[1, self.sequence_length_left - filter_size_3 + 1, 1, 1],
-    #           strides=[1, 1, 1, 1], padding='VALID', name="pool")
-    #         pooled = tf.nn.max_pool(h, ksize=[1, filter_size_3, 1, 1], strides=[1, 2, 1, 1],
-    #           padding='VALID', name="pool3")
-    #         print(h)
-    #         print(pooled)
-    #
-    #     return pooled
-
-    # def preprocessing(self, train_x, val_x):
-    #     print("start preprocessing")
-    #     raw_text = np.hstack([train_x['question1'], train_x['question2'], val_x['question1'], val_x['question2']])
-    #     tok_raw = Tokenizer()
-    #     tok_raw.fit_on_texts(raw_text)
-    #
-    #     train_x['seq_question1'] = tok_raw.texts_to_sequences(train_x['question1'])
-    #     train_x['seq_question2'] = tok_raw.texts_to_sequences(train_x['question2'])
-    #     val_x['seq_question1'] = tok_raw.texts_to_sequences(val_x['question1'])
-    #     val_x['seq_question2'] = tok_raw.texts_to_sequences(val_x['question2'])
-    #     self.MAX_TEXT = np.unique(DataHelpers.flatten(np.concatenate([train_x['seq_question1'], train_x['seq_question2'], val_x['seq_question1'], val_x['seq_question2']]))).shape[0] + 1
-    #
-    #     train_Q1 = pad_sequences(train_x['seq_question1'], maxlen=FLAGS.sentence_len)
-    #     train_Q2 = pad_sequences(train_x['seq_question2'], maxlen=FLAGS.sentence_len)
-    #     val_Q1 = pad_sequences(val_x['seq_question1'], maxlen=FLAGS.sentence_len)
-    #     val_Q2 = pad_sequences(val_x['seq_question2'], maxlen=FLAGS.sentence_len)
-    #     return train_Q1, train_Q2, val_Q1, val_Q2
-
-    # def load_data_and_labels(self, positive_data_file, negative_data_file):
-    #     """
-    #     Loads MR polarity data from files, splits the data into words and generates labels.
-    #     Returns split sentences and labels.
-    #     """
-    #     # Load data from files
-    #     positive_examples = list(open(positive_data_file, "r", encoding='utf-8').readlines())
-    #     positive_examples = [s.strip() for s in positive_examples]
-    #     negative_examples = list(open(negative_data_file, "r", encoding='utf-8').readlines())
-    #     negative_examples = [s.strip() for s in negative_examples]
-    #     # Split by words
-    #     x_text = positive_examples + negative_examples
-    #     x_text = [DataHelpers.clean_str(sent) for sent in x_text]
-    #     # Generate labels
-    #     positive_labels = [[0, 1] for _ in positive_examples]
-    #     negative_labels = [[1, 0] for _ in negative_examples]
-    #     y = np.concatenate([positive_labels, negative_labels], 0)
-    #     return [x_text, y]
